@@ -1,0 +1,20 @@
+node_modules
+dist
+dist-ssr
+*.local
+*.log
+.DS_Store
+
+# Ignore local helper shell scripts except public Cloud Run deploy script
+*.sh
+!deploy-cloudrun.sh
+
+# Never commit API keys or secrets to Git
+.env
+.env.*
+!.env.example
+
+# Ignore raw/temporary scraper caches, while keeping the pre-warmed public catalog
+# (contains zero API keys/secrets) so fresh container deploys boot with 50 cinemas immediately
+server/cache/*
+!server/cache/live_catalog.json

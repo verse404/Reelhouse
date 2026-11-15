@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <rect width="64" height="64" fill="#090908"/>
+  <rect x="5" y="5" width="54" height="54" stroke="#D5B886" stroke-width="1"/>
+  <rect x="9" y="9" width="46" height="46" stroke="#F4F0E8" stroke-opacity="0.22" stroke-width="0.75"/>
+  <text x="32" y="43" text-anchor="middle" fill="#F4F0E8" font-family="Didot, Bodoni MT, Georgia, serif" font-size="32" font-style="italic">R</text>
+</svg>

@@ -1,0 +1,141 @@
+:root {
+  /* ==========================================================================
+     NOIR SALON (Default) — Lacquered Obsidian, Raw Silk Alabaster & 18k Champagne Gold
+     Inspired by Saint Laurent Productions, Cahiers du Cinéma & Fondazione Prada
+     ========================================================================== */
+  --bg-canvas: #080807;
+  --bg-surface-1: #0e0d0b;
+  --bg-surface-2: #151310;
+  --bg-surface-3: #1e1b17;
+  --bg-elevated: #171512;
+  --header-glass: rgba(8, 8, 7, 0.86);
+  --dock-glass: rgba(16, 15, 13, 0.95);
+
+  --ink-primary: #f4f0e8;
+  --ink-secondary: #cbc3b5;
+  --ink-muted: #8a8174;
+  --ink-on-accent: #0c0b09;
+
+  /* Muted 18k Champagne Gold Leaf (never loud orange) */
+  --accent-amber: #d5b886;
+  --accent-amber-bright: #e7cfa3;
+  --accent-amber-soft: rgba(213, 184, 134, 0.11);
+
+  /* Bordeaux / Oxblood & Celadon Jade */
+  --accent-terracotta: #c86458;
+  --accent-terracotta-soft: rgba(200, 100, 88, 0.14);
+
+  --accent-sage: #8ab08e;
+  --accent-sage-soft: rgba(138, 176, 142, 0.13);
+
+  --hairline: rgba(244, 240, 232, 0.12);
+  --hairline-strong: rgba(244, 240, 232, 0.26);
+  --hairline-amber: rgba(213, 184, 134, 0.48);
+
+  /* High-Fashion Typography Stack */
+  --font-serif: 'Bodoni Moda', 'Didot', 'Bodoni MT', Georgia, serif;
+  --font-editorial: 'Cormorant Garamond', Garamond, Georgia, serif;
+  --font-sans: 'Google Sans Flex', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono: 'Google Sans Code', ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* Razor-sharp Couture / Exhibition Geometry */
+  --radius-xs: 0px;
+  --radius-sm: 1px;
+  --radius-md: 2px;
+  --radius-lg: 2px;
+
+  --shadow-soft: 0 18px 48px rgba(0, 0, 0, 0.55);
+  --shadow-modal: 0 32px 90px rgba(0, 0, 0, 0.82);
+
+  --max-content-width: 1320px;
+}
+
+/* ==========================================================================
+   IVOIRE EDITION — Heavyweight Cotton Rag Gallery Paper & Sumi Obsidian Ink
+   ========================================================================== */
+[data-edition='ivoire'] {
+  color-scheme: light;
+  --bg-canvas: #f4efe6;
+  --bg-surface-1: #faf7f1;
+  --bg-surface-2: #ede6da;
+  --bg-surface-3: #e2d9ca;
+  --bg-elevated: #ffffff;
+  --header-glass: rgba(244, 239, 230, 0.9);
+  --dock-glass: rgba(250, 247, 241, 0.96);
+
+  --ink-primary: #11100e;
+  --ink-secondary: #3e3a34;
+  --ink-muted: #726a5e;
+  --ink-on-accent: #faf7f1;
+
+  --accent-amber: #7d5d2b;
+  --accent-amber-bright: #5e441c;
+  --accent-amber-soft: rgba(125, 93, 43, 0.1);
+
+  --accent-terracotta: #9e3329;
+  --accent-terracotta-soft: rgba(158, 51, 41, 0.1);
+
+  --accent-sage: #2e6638;
+  --accent-sage-soft: rgba(46, 102, 56, 0.1);
+
+  --hairline: rgba(17, 16, 14, 0.13);
+  --hairline-strong: rgba(17, 16, 14, 0.3);
+  --hairline-amber: rgba(125, 93, 43, 0.45);
+
+  --shadow-soft: 0 16px 40px rgba(20, 17, 12, 0.08);
+  --shadow-modal: 0 28px 72px rgba(20, 17, 12, 0.22);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  color-scheme: dark;
+  background-color: var(--bg-canvas);
+  color: var(--ink-primary);
+  font-family: var(--font-sans);
+  /* Suppress contextual Google logo ligatures on Google Sans Flex */
+  font-variant-ligatures: no-contextual;
+  font-feature-settings: 'calt' 0, 'liga' 0;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background-color: var(--bg-canvas);
+  color: var(--ink-primary);
+  line-height: 1.55;
+  transition: background-color 0.28s ease, color 0.28s ease;
+}
+
+/* Tactile 35mm Silver-Halide Film Grain Veil (No Textureless Surfaces) */
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 999;
+  pointer-events: none;
+  opacity: 0.032;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+button,
+input,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+:focus-visible {
+  outline: 1px solid var(--accent-amber);
+  outline-offset: 3px;
+}

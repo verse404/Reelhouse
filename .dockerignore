@@ -1,0 +1,12 @@
+# Never bake local secrets, credentials, git metadata, or dev node_modules into container images
+.env
+.env.*
+node_modules
+dist
+.git
+.gitignore
+*.log
+*.sh
+server/cache/*.gz
+server/cache/*.tmp
+server/cache/serp_venues
