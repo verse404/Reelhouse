@@ -1131,7 +1131,7 @@ export const COMING_SOON_MOVIES: Movie[] = [
 ];
 
 /**
- * Generates a 7-day rolling calendar starting from local Today in the chosen city.
+ * Generates a 14-day rolling calendar (This Week + Next Week) starting from local Today in the chosen city.
  */
 export function buildSevenDayCalendar(city: CityId): CalendarDayOption[] {
   const timeZone = CITIES[city].timeZone;
@@ -1139,7 +1139,7 @@ export function buildSevenDayCalendar(city: CityId): CalendarDayOption[] {
   const [startYear, startMonth, startDay] = todayIso.split('-').map(Number);
 
   const days: CalendarDayOption[] = [];
-  for (let offset = 0; offset < 7; offset++) {
+  for (let offset = 0; offset < 14; offset++) {
     const dt = new Date(Date.UTC(startYear, startMonth - 1, startDay + offset, 2, 0, 0));
     const y = dt.getUTCFullYear();
     const m = String(dt.getUTCMonth() + 1).padStart(2, '0');

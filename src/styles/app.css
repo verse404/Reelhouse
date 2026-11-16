@@ -431,6 +431,7 @@
 
 .date-strip {
   display: flex;
+  min-width: 0;
   border: 1px solid var(--hairline);
   overflow-x: auto;
   scrollbar-width: thin;

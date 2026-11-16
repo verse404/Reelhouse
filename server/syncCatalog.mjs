@@ -1558,14 +1558,14 @@ async function fetchGoldenAgeSydneyDaysHtml(todayIso) {
   if (!res.ok) return [];
   const html = await res.text();
 
-  // Map calendar day-of-month number within the next 7 days to "MonShort DayNum" (e.g. 14 -> "Nov 14")
-  const dayNumToDateField = new Map();
-  for (let offset = 0; offset < 7; offset++) {
+  // Map exact ("WeekdayShort DayNum") within the next 14 days to ISO date (e.g. "Tue 24" -> "2026-11-24")
+  const wkDayToIso = new Map();
+  for (let offset = 0; offset < 14; offset++) {
     const candidateIso = addDaysIso(todayIso, offset);
     const [cy, cm, cd] = candidateIso.split('-').map(Number);
     const dt = new Date(Date.UTC(cy, cm - 1, cd, 2, 0, 0));
-    const monShort = dt.toLocaleString('en-US', { month: 'short', timeZone: 'UTC' });
-    dayNumToDateField.set(cd, `${monShort} ${cd}`);
+    const wkShort = dt.toLocaleString('en-US', { weekday: 'short', timeZone: 'UTC' }).toLowerCase();
+    wkDayToIso.set(`${wkShort} ${cd}`, candidateIso);
   }
 
   const dayGroups = new Map();
@@ -1579,20 +1579,20 @@ async function fetchGoldenAgeSydneyDaysHtml(todayIso) {
 
     const rawDateTime = `${m[2] || ''}${m[3] || ''}`.replace(/\s+/g, ' ').trim();
     // Example: "Sat 14 3:05pm"
-    const dtMatch = rawDateTime.match(/^[A-Za-z]{3}\s+(\d{1,2})\s+(\d{1,2}:\d{2}\s*(?:am|pm))$/i);
+    const dtMatch = rawDateTime.match(/^([A-Za-z]{3})\s+(\d{1,2})\s+(\d{1,2}:\d{2}\s*(?:am|pm))$/i);
     if (!dtMatch) continue;
-    const dayOfMonth = Number.parseInt(dtMatch[1], 10);
-    const timeVal = dtMatch[2].replace(/\s+/g, '').toLowerCase();
-    const dateField = dayNumToDateField.get(dayOfMonth);
-    if (!dateField) continue;
+    const wkKey = `${dtMatch[1].toLowerCase()} ${Number.parseInt(dtMatch[2], 10)}`;
+    const timeVal = dtMatch[3].replace(/\s+/g, '').toLowerCase();
+    const matchedIso = wkDayToIso.get(wkKey);
+    if (!matchedIso) continue;
 
     const showingType = /\b35mm\b/i.test(rawTitle) ? '35mm Paramount Room' : 'Paramount Screening Room';
     const cleanedTitle = rawTitle.replace(/\s*\(35mm\)/i, '').trim();
 
-    if (!dayGroups.has(dateField)) {
-      dayGroups.set(dateField, { day: '', date: dateField, moviesMap: new Map() });
+    if (!dayGroups.has(matchedIso)) {
+      dayGroups.set(matchedIso, { isoDate: matchedIso, day: '', date: matchedIso, moviesMap: new Map() });
     }
-    const grp = dayGroups.get(dateField);
+    const grp = dayGroups.get(matchedIso);
     if (!grp.moviesMap.has(cleanedTitle)) {
       grp.moviesMap.set(cleanedTitle, new Map());
     }
@@ -1602,6 +1602,7 @@ async function fetchGoldenAgeSydneyDaysHtml(todayIso) {
   }
 
   return Array.from(dayGroups.values()).map((grp) => ({
+    isoDate: grp.isoDate,
     day: grp.day,
     date: grp.date,
     movies: Array.from(grp.moviesMap.entries()).map(([name, typeMap]) => ({
@@ -1609,6 +1610,88 @@ async function fetchGoldenAgeSydneyDaysHtml(todayIso) {
       showing: Array.from(typeMap.entries()).map(([type, time]) => ({ type, time })),
     })),
   }));
+}
+
+const MOVING_STORY_BASE_URLS = {
+  'mel-lido': 'https://www.lidocinemas.com.au',
+  'mel-classic': 'https://www.classiccinemas.com.au',
+  'mel-cameo': 'https://www.cameocinemas.com.au',
+  'syd-ritz': 'https://www.ritzcinemas.com.au',
+};
+
+/**
+ * Directly scrapes 14 days of timetables for Lido Hawthorn, Classic Elsternwick,
+ * Cameo Belgrave, and Ritz Randwick (`/now-showing/YYYY-MM-DD`) at zero SerpApi cost.
+ */
+async function fetchMovingStoryVenueDaysHtml(baseUrl, todayIso) {
+  const dateIsos = [];
+  for (let offset = 0; offset < 14; offset++) {
+    dateIsos.push(addDaysIso(todayIso, offset));
+  }
+
+  const outDays = [];
+  const BATCH = 5;
+  for (let i = 0; i < dateIsos.length; i += BATCH) {
+    const slice = dateIsos.slice(i, i + BATCH);
+    const batch = await Promise.all(
+      slice.map(async (isoDate) => {
+        try {
+          const res = await fetch(`${baseUrl}/now-showing/${isoDate}`, {
+            headers: {
+              'User-Agent':
+                'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+              Accept: 'text/html,application/xhtml+xml',
+            },
+            signal: AbortSignal.timeout(12000),
+          });
+          if (!res.ok) return null;
+          const html = await res.text();
+          const moviesMap = new Map();
+          const linkRegex =
+            /<a\s+class="Link sessions-link"[^>]*data-name="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
+          let m;
+          while ((m = linkRegex.exec(html)) !== null) {
+            const rawTitle = decodeHtmlEntities(m[1]);
+            if (!rawTitle || /gift card|venue hire|trivia/i.test(rawTitle)) continue;
+            const inner = m[2];
+            const tMatch = inner.match(/<span\s+class="Time">([^<]+)<\/span>/i);
+            if (!tMatch) continue;
+            const timeVal = tMatch[1].replace(/\s+/g, '').toLowerCase();
+            const attrMatches = [...inner.matchAll(/<span\s+class="Attribute">([^<]+)<\/span>/gi)]
+              .map((x) => decodeHtmlEntities(x[1]))
+              .join(' ');
+            const showingType = /\b(35mm|70mm)\b/i.test(`${rawTitle} ${attrMatches}`)
+              ? '35mm / 70mm Print'
+              : /\b(atmos|dolby)\b/i.test(attrMatches)
+                ? 'Dolby Atmos'
+                : /\brooftop\b/i.test(attrMatches)
+                  ? 'Rooftop Cinema'
+                  : 'Standard';
+            const cleanedTitle = rawTitle.replace(/\s*\((?:35mm|70mm)\)/i, '').trim();
+            if (!moviesMap.has(cleanedTitle)) moviesMap.set(cleanedTitle, new Map());
+            const fmtMap = moviesMap.get(cleanedTitle);
+            fmtMap.set(showingType, [...(fmtMap.get(showingType) || []), timeVal]);
+          }
+          if (moviesMap.size === 0) return null;
+          return {
+            isoDate,
+            day: '',
+            date: isoDate,
+            movies: Array.from(moviesMap.entries()).map(([name, fmtMap]) => ({
+              name,
+              showing: Array.from(fmtMap.entries()).map(([type, time]) => ({ type, time })),
+            })),
+          };
+        } catch {
+          return null;
+        }
+      })
+    );
+    for (const item of batch) {
+      if (item) outDays.push(item);
+    }
+  }
+  return outDays;
 }
 
 async function findRecentVenueCache(venueId, fallbackTodayIso, maxAgeHours = 24) {
@@ -1746,12 +1829,13 @@ async function fetchCinemaShowtimesViaSerpApi(venue, serpKey, prevVenueDays = nu
 
   const venueCacheFile = path.join(SERP_VENUE_CACHE_DIR, `${venue.id}_${todayIso}.json`);
 
-  // Direct HTML scrapers (0 SerpApi cost) always refresh daily (24h TTL)
-  if (venue.id === 'mel-imax' || venue.id === 'syd-golden-age') {
+  // Direct 14-day HTML scrapers (0 SerpApi cost) always refresh daily (20h TTL)
+  const isMovingStoryVenue = Boolean(MOVING_STORY_BASE_URLS[venue.id]);
+  if (venue.id === 'mel-imax' || venue.id === 'syd-golden-age' || isMovingStoryVenue) {
     const directRecent = await findRecentVenueCache(venue.id, todayIso, 20);
     if (
       directRecent &&
-      countFutureDaysInBlocks(directRecent.days, directRecent.anchorIso, todayIso) >= 3
+      countFutureDaysInBlocks(directRecent.days, directRecent.anchorIso, todayIso) >= 8
     ) {
       return {
         venue,
@@ -1765,7 +1849,9 @@ async function fetchCinemaShowtimesViaSerpApi(venue, serpKey, prevVenueDays = nu
     const directDays =
       venue.id === 'mel-imax'
         ? await fetchImaxMelbourneDaysHtml()
-        : await fetchGoldenAgeSydneyDaysHtml(todayIso);
+        : venue.id === 'syd-golden-age'
+          ? await fetchGoldenAgeSydneyDaysHtml(todayIso)
+          : await fetchMovingStoryVenueDaysHtml(MOVING_STORY_BASE_URLS[venue.id], todayIso);
     if (directDays.length > 0) {
       await fs.mkdir(SERP_VENUE_CACHE_DIR, { recursive: true });
       await fs.writeFile(venueCacheFile, JSON.stringify(directDays), 'utf-8');
@@ -1884,7 +1970,7 @@ export async function syncLiveCatalog() {
   const auVenues = TARGET_VENUES.filter((v) => v.city !== 'shanghai');
 
   const shanghaiTodayIso = getLocalTodayIso('Asia/Shanghai');
-  const shanghaiMaxIso = addDaysIso(shanghaiTodayIso, 6);
+  const shanghaiMaxIso = addDaysIso(shanghaiTodayIso, 13);
   const shanghaiResults = await Promise.all(
     shanghaiVenues.map((v) =>
       fetchMaoyanShanghaiVenueData(v, shanghaiTodayIso).catch(() => ({
