@@ -16,6 +16,7 @@ import {
   type UserLocationOrigin,
 } from '../utils/proximity';
 import { sanitizeSearchQuery } from '../utils/security';
+import { searchLocalGazetteer } from '../utils/localGazetteer';
 
 export interface GeocodedPlaceResult {
   label: string;
@@ -82,15 +83,22 @@ export function MyLocationModal({
           `/api/geocode?q=${encodeURIComponent(trimmed)}&city=${encodeURIComponent(cityMeta.id)}`,
           { headers: { Accept: 'application/json' } }
         );
-        if (!res.ok) throw new Error('Geocode lookup failed');
+        const ctype = res.headers.get('content-type') || '';
+        if (!res.ok || !ctype.includes('application/json')) {
+          throw new Error('Static host fallback');
+        }
         const data = (await res.json()) as { ok?: boolean; results?: GeocodedPlaceResult[] };
         if (!cancelled) {
-          setResults(Array.isArray(data.results) ? data.results : []);
+          setResults(
+            Array.isArray(data.results) && data.results.length > 0
+              ? data.results
+              : searchLocalGazetteer(trimmed, cityMeta.id)
+          );
           setIsSearching(false);
         }
       } catch {
         if (!cancelled) {
-          setResults([]);
+          setResults(searchLocalGazetteer(trimmed, cityMeta.id));
           setIsSearching(false);
         }
       }

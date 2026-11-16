@@ -107,11 +107,19 @@ class HybridAustralianCinemaProvider implements CinemaDataProvider {
 
   async hydrateFromLiveBff(): Promise<LiveSyncStatus> {
     try {
-      const response = await fetch('/api/catalog', {
+      let response = await fetch('/api/catalog', {
         method: 'GET',
         headers: { Accept: 'application/json' },
-      });
-      if (!response.ok) return this.syncStatus;
+      }).catch(() => null);
+
+      const contentType = response?.headers.get('content-type') || '';
+      if (!response || !response.ok || !contentType.includes('application/json')) {
+        response = await fetch('./live_catalog.json', {
+          method: 'GET',
+          headers: { Accept: 'application/json' },
+        }).catch(() => null);
+      }
+      if (!response || !response.ok) return this.syncStatus;
 
       const payload = (await response.json()) as BffCatalogPayload;
       const configuredApis = {

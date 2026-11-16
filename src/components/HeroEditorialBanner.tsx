@@ -13,19 +13,19 @@ interface CityPhotoPlate {
 const CITY_GALLERY_PLATES: Record<CityId, CityPhotoPlate[]> = {
   melbourne: [
     {
-      src: '/cities/melbourne-cinema-dusk.jpg',
+      src: './cities/melbourne-cinema-dusk.jpg',
       alt: 'Illuminated 1930s Art Deco Melbourne cinema marquee reflecting on rain-slicked bluestone beside a classic green-and-gold Route 19 tram at dusk',
       plateLabel: 'PLATE 01 — MELBOURNE RAIN & ART DECO NEON',
       specLabel: 'SWANSTON & CARLTON · 35MM · 1.43:1 IMAX',
     },
     {
-      src: '/cities/melbourne-flinders-night.jpg',
+      src: './cities/melbourne-flinders-night.jpg',
       alt: 'Long-exposure evening photograph of a Melbourne tram gliding past the illuminated dome of Flinders Street Station',
       plateLabel: 'PLATE 02 — FLINDERS STREET EVENING CORRIDOR',
       specLabel: 'CBD PARIS END · SOUTHBANK · FITZROY',
     },
     {
-      src: '/cities/melbourne-astor-1936.jpg',
+      src: './cities/melbourne-astor-1936.jpg',
       alt: 'Archival 1936 monochrome photograph of The Astor Theatre dress circle and proscenium curtain in St Kilda, Melbourne',
       plateLabel: 'PLATE 03 — THE ASTOR THEATRE ARCHIVE (1936)',
       specLabel: 'ST KILDA · SINGLE-SCREEN 70MM PALACE',
@@ -33,19 +33,19 @@ const CITY_GALLERY_PLATES: Record<CityId, CityPhotoPlate[]> = {
   ],
   sydney: [
     {
-      src: '/cities/sydney-cinema-twilight.jpg',
+      src: './cities/sydney-cinema-twilight.jpg',
       alt: 'Glowing golden and turquoise Art Deco neon marquee of an iconic 1930s Sydney picture palace framed by palm trees at deep sapphire twilight',
       plateLabel: 'PLATE 01 — SYDNEY ART DECO PICTURE PALACE',
       specLabel: 'CREMORNE · RANDWICK · SURRY HILLS',
     },
     {
-      src: '/cities/sydney-orpheum-interior.jpg',
+      src: './cities/sydney-orpheum-interior.jpg',
       alt: 'Interior auditorium of Sydney’s 1935 Hayden Orpheum Picture Palace showing its gold Art Deco sunburst dome and crimson velvet stage curtain',
       plateLabel: 'PLATE 02 — HAYDEN ORPHEUM DRESS CIRCLE (1935)',
       specLabel: 'WURLITZER ORGAN · 35MM & 70MM PRINTS',
     },
     {
-      src: '/cities/sydney-darling-harbour.jpg',
+      src: './cities/sydney-darling-harbour.jpg',
       alt: 'Nighttime skyline reflections shimmering across Darling Harbour outside the IMAX Sydney waterfront cinema district',
       plateLabel: 'PLATE 03 — DARLING HARBOUR WATERFRONT',
       specLabel: 'DUAL 4K LASER IMAX · GEORGE ST CBD',
@@ -53,19 +53,19 @@ const CITY_GALLERY_PLATES: Record<CityId, CityPhotoPlate[]> = {
   ],
   shanghai: [
     {
-      src: '/cities/shanghai-cinema-night.jpg',
+      src: './cities/shanghai-cinema-night.jpg',
       alt: 'Stepped translucent amber Art Deco glass tower of Shanghai’s historic Cathay Theatre glowing behind autumn sycamore trees on rain-wet Huaihai Road',
       plateLabel: 'PLATE 01 — CATHAY THEATRE · 淮海路国泰电影院',
       specLabel: '1930 ART DECO · FORMER FRENCH CONCESSION',
     },
     {
-      src: '/cities/shanghai-bund-night.jpg',
+      src: './cities/shanghai-bund-night.jpg',
       alt: 'Panoramic night skyline of Lujiazui and the Oriental Pearl Tower shimmering in neon reflections across Shanghai’s Huangpu River',
       plateLabel: 'PLATE 02 — HUANGPU & NORTH BUND · 外滩夜色',
       specLabel: 'PALACE LUXE · CGV BUND · QIANTAN',
     },
     {
-      src: '/cities/shanghai-grand-cinema.jpg',
+      src: './cities/shanghai-grand-cinema.jpg',
       alt: 'László Hudec’s 1928 modernist Art Deco facade and vertical sign tower of Grand Cinema on Nanjing West Road, People’s Square, Shanghai',
       plateLabel: 'PLATE 03 — GRAND CINEMA (1928) · 大光明电影院',
       specLabel: 'LÁSZLÓ HUDEC · SIFF PREMIERE PALACE',

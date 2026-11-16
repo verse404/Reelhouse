@@ -13,6 +13,7 @@ const securityHeaders = {
 };
 
 export default defineConfig({
+  base: './',
   plugins: [react()],
   server: {
     // Bound strictly to loopback 127.0.0.1
