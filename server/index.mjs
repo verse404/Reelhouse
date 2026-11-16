@@ -217,10 +217,15 @@ async function getCachedOrFreshCatalog(forceSync = false) {
   if (!forceSync) {
     try {
       const stat = await fs.stat(CACHE_FILE);
-      const ageHours = (Date.now() - stat.mtimeMs) / 3_600_000;
       const raw = await fs.readFile(CACHE_FILE, 'utf-8');
       const parsed = JSON.parse(raw);
       parsed.configuredApis = configuredApis;
+
+      // Always measure true catalog age from syncedAtIso inside JSON rather than disk mtime
+      // (container builds and git checkouts reset file mtime even when data is days old).
+      const ageHours = parsed.syncedAtIso
+        ? (Date.now() - Date.parse(parsed.syncedAtIso)) / 3_600_000
+        : (Date.now() - stat.mtimeMs) / 3_600_000;
 
       const ratingsAgeHours = parsed.ratingsSyncedAtIso
         ? (Date.now() - Date.parse(parsed.ratingsSyncedAtIso)) / 3_600_000
@@ -498,4 +503,16 @@ server.listen(PORT, BIND_HOST, () => {
   console.log(
     `[Reelhouse BFF] Listening on http://${BIND_HOST}:${PORT} (mode=${hasTmdb ? 'live-ready' : 'curated-fallback'}, static=${SERVE_STATIC})`
   );
+
+  // Built-in proactive daily session refresh: check on boot and every 6 hours in the background
+  // so fresh sessions are pulled automatically every day even before visitors arrive.
+  if (hasTmdb) {
+    setTimeout(() => {
+      getCachedOrFreshCatalog(false).catch(() => null);
+    }, 2500).unref();
+
+    setInterval(() => {
+      getCachedOrFreshCatalog(false).catch(() => null);
+    }, 6 * 3_600_000).unref();
+  }
 });

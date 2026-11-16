@@ -1,0 +1,46 @@
+name: Daily Cinema Session Sync
+
+on:
+  schedule:
+    # Runs automatically every day at 20:15 UTC (07:15 AEDT Melbourne/Sydney · 04:15 CST Shanghai)
+    - cron: '15 20 * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  sync-sessions:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Pull fresh daily cinema sessions & film ratings
+        env:
+          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
+          OMDB_API_KEY: ${{ secrets.OMDB_API_KEY }}
+          MDBLIST_API_KEY: ${{ secrets.MDBLIST_API_KEY }}
+          SERPAPI_API_KEY: ${{ secrets.SERPAPI_API_KEY }}
+        run: npm run sync
+
+      - name: Commit and push updated session catalog (triggers Render auto-deploy)
+        run: |
+          if git diff --quiet -- server/cache/live_catalog.json public/live_catalog.json; then
+            echo "No catalog changes detected."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add server/cache/live_catalog.json public/live_catalog.json
+          git commit -m "chore(catalog): automated daily cinema session & ratings sync"
+          git push origin HEAD:main

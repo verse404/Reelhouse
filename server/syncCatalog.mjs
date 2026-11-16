@@ -1717,7 +1717,22 @@ function getTimeZoneForCity(city) {
   return 'Australia/Melbourne';
 }
 
-async function fetchCinemaShowtimesViaSerpApi(venue, serpKey) {
+// SerpApi Free Plan protection: 33 AU SerpApi venues refreshed every 84h (~3.5 days)
+// uses ~235 searches/month (safely under 250/mo free cap), while refreshing early if < 3 days remain!
+// Direct scrapers (Shanghai Maoyan 15 venues, IMAX Melbourne, Golden Age Sydney) refresh daily (24h) at 0 cost.
+const SERP_AU_CACHE_TTL_HOURS = Number.parseFloat(process.env.SERP_AU_TTL_HOURS || '84') || 84;
+
+function countFutureDaysInBlocks(days, anchorIso, realTodayIso) {
+  if (!Array.isArray(days)) return 0;
+  const futureSet = new Set();
+  for (const b of days) {
+    const dIso = b.isoDate || resolveDayBlockDateIso(b, anchorIso);
+    if (dIso && dIso >= realTodayIso) futureSet.add(dIso);
+  }
+  return futureSet.size;
+}
+
+async function fetchCinemaShowtimesViaSerpApi(venue, serpKey, prevVenueDays = null) {
   const locationLabel =
     venue.city === 'melbourne'
       ? 'Melbourne, Victoria, Australia'
@@ -1729,53 +1744,86 @@ async function fetchCinemaShowtimesViaSerpApi(venue, serpKey) {
     return fetchMaoyanShanghaiVenueData(venue, todayIso);
   }
 
-  const recentCache = await findRecentVenueCache(venue.id, todayIso, 24);
-  if (recentCache) {
-    return { venue, todayIso: recentCache.anchorIso, realTodayIso: todayIso, days: recentCache.days };
-  }
-
   const venueCacheFile = path.join(SERP_VENUE_CACHE_DIR, `${venue.id}_${todayIso}.json`);
 
-  if (venue.id === 'mel-imax') {
-    const imaxDays = await fetchImaxMelbourneDaysHtml();
-    if (imaxDays.length > 0) {
+  // Direct HTML scrapers (0 SerpApi cost) always refresh daily (24h TTL)
+  if (venue.id === 'mel-imax' || venue.id === 'syd-golden-age') {
+    const directRecent = await findRecentVenueCache(venue.id, todayIso, 20);
+    if (
+      directRecent &&
+      countFutureDaysInBlocks(directRecent.days, directRecent.anchorIso, todayIso) >= 3
+    ) {
+      return {
+        venue,
+        todayIso: directRecent.anchorIso,
+        realTodayIso: todayIso,
+        days: directRecent.days,
+        usedSerpCredit: false,
+      };
+    }
+
+    const directDays =
+      venue.id === 'mel-imax'
+        ? await fetchImaxMelbourneDaysHtml()
+        : await fetchGoldenAgeSydneyDaysHtml(todayIso);
+    if (directDays.length > 0) {
       await fs.mkdir(SERP_VENUE_CACHE_DIR, { recursive: true });
-      await fs.writeFile(venueCacheFile, JSON.stringify(imaxDays), 'utf-8');
-      return { venue, todayIso, realTodayIso: todayIso, days: imaxDays };
+      await fs.writeFile(venueCacheFile, JSON.stringify(directDays), 'utf-8');
+      return { venue, todayIso, realTodayIso: todayIso, days: directDays, usedSerpCredit: false };
     }
   }
 
-  if (venue.id === 'syd-golden-age') {
-    const gaDays = await fetchGoldenAgeSydneyDaysHtml(todayIso);
-    if (gaDays.length > 0) {
-      await fs.mkdir(SERP_VENUE_CACHE_DIR, { recursive: true });
-      await fs.writeFile(venueCacheFile, JSON.stringify(gaDays), 'utf-8');
-      return { venue, todayIso, realTodayIso: todayIso, days: gaDays };
+  // SerpApi-backed AU venues: reuse cache within 84h window as long as >= 3 upcoming days remain
+  const recentCache = await findRecentVenueCache(venue.id, todayIso, SERP_AU_CACHE_TTL_HOURS);
+  if (
+    recentCache &&
+    countFutureDaysInBlocks(recentCache.days, recentCache.anchorIso, todayIso) >= 3
+  ) {
+    return {
+      venue,
+      todayIso: recentCache.anchorIso,
+      realTodayIso: todayIso,
+      days: recentCache.days,
+      usedSerpCredit: false,
+    };
+  }
+
+  // Stateless container carry-forward: if live_catalog.json already holds fresh (< 84h) upcoming
+  // schedules (>= 3 future days) for this venue, preserve them without burning SerpApi quota.
+  if (prevVenueDays && prevVenueDays.fresh && prevVenueDays.futureDateCount >= 3) {
+    return {
+      venue,
+      todayIso,
+      realTodayIso: todayIso,
+      days: prevVenueDays.days,
+      usedSerpCredit: false,
+    };
+  }
+
+  if (serpKey) {
+    const url = new URL('https://serpapi.com/search.json');
+    url.searchParams.set('engine', 'google');
+    url.searchParams.set('q', venue.serpQuery);
+    url.searchParams.set('location', locationLabel);
+    url.searchParams.set('hl', 'en');
+    url.searchParams.set('gl', 'au');
+    url.searchParams.set('api_key', serpKey);
+
+    try {
+      const payload = await fetchJsonSafe(url.toString());
+      const days = Array.isArray(payload.showtimes) ? payload.showtimes : [];
+      if (days.length > 0) {
+        await fs.mkdir(SERP_VENUE_CACHE_DIR, { recursive: true });
+        await fs.writeFile(venueCacheFile, JSON.stringify(days), 'utf-8');
+        return { venue, todayIso, realTodayIso: todayIso, days, usedSerpCredit: true };
+      }
+    } catch {
+      // Fall through to multi-day cache grace fallback below
     }
   }
 
-  const url = new URL('https://serpapi.com/search.json');
-  url.searchParams.set('engine', 'google');
-  url.searchParams.set('q', venue.serpQuery);
-  url.searchParams.set('location', locationLabel);
-  url.searchParams.set('hl', 'en');
-  url.searchParams.set('gl', 'au');
-  url.searchParams.set('api_key', serpKey);
-
-  try {
-    const payload = await fetchJsonSafe(url.toString());
-    const days = Array.isArray(payload.showtimes) ? payload.showtimes : [];
-    if (days.length > 0) {
-      await fs.mkdir(SERP_VENUE_CACHE_DIR, { recursive: true });
-      await fs.writeFile(venueCacheFile, JSON.stringify(days), 'utf-8');
-      return { venue, todayIso, realTodayIso: todayIso, days };
-    }
-  } catch {
-    // Fall through to multi-day cache grace fallback below
-  }
-
-  // Resilient fallback: if an upstream query times out or returns AI Overview instead of OneBox,
-  // reuse any recent multi-day cache file (< 120h) that still covers upcoming calendar dates!
+  // Resilient fallback: if an upstream query times out, hits monthly quota, or runs without SerpApi key,
+  // reuse any recent multi-day cache file (< 120h) or remaining future sessions from live_catalog.json!
   const fallbackCache = await findRecentVenueCache(venue.id, todayIso, 120);
   if (fallbackCache) {
     return {
@@ -1783,9 +1831,19 @@ async function fetchCinemaShowtimesViaSerpApi(venue, serpKey) {
       todayIso: fallbackCache.anchorIso,
       realTodayIso: todayIso,
       days: fallbackCache.days,
+      usedSerpCredit: false,
     };
   }
-  return { venue, todayIso, realTodayIso: todayIso, days: [] };
+  if (prevVenueDays && prevVenueDays.futureDateCount >= 1) {
+    return {
+      venue,
+      todayIso,
+      realTodayIso: todayIso,
+      days: prevVenueDays.days,
+      usedSerpCredit: false,
+    };
+  }
+  return { venue, todayIso, realTodayIso: todayIso, days: [], usedSerpCredit: false };
 }
 
 export async function syncLiveCatalog() {
@@ -1913,30 +1971,86 @@ export async function syncLiveCatalog() {
     }
   }
 
-  // 1b. If SerpApi is configured, fetch real-time multi-day schedules across all 35 Melbourne & Sydney cinemas!
-  if (cfg.serpapiApiKey) {
+  // 1b. Fetch real-time multi-day schedules across all 35 Melbourne & Sydney cinemas
+  // (direct HTML scrapers run daily; SerpApi venues use 84h smart TTL + stateless live_catalog carry-forward).
+  let prevSerpSyncedAtIso = null;
+  const prevVenueDaysMap = new Map();
+  try {
+    const prevRaw = JSON.parse(await fs.readFile(CACHE_FILE, 'utf-8'));
+    prevSerpSyncedAtIso = prevRaw.serpSyncedAtIso || prevRaw.syncedAtIso || null;
+    const serpAgeHours = prevSerpSyncedAtIso
+      ? (Date.now() - Date.parse(prevSerpSyncedAtIso)) / 3_600_000
+      : Infinity;
+    const prevTitleMap = new Map((prevRaw.movies || []).map((m) => [m.id, m.title]));
+
+    const byVenueDate = new Map();
+    for (const s of prevRaw.sessions || []) {
+      if (s.city === 'shanghai') continue;
+      const tz = getTimeZoneForCity(s.city);
+      const vToday = getLocalTodayIso(tz);
+      if (!s.dateIso || s.dateIso < vToday) continue;
+      const mTitle = prevTitleMap.get(s.movieId);
+      if (!mTitle) continue;
+
+      if (!byVenueDate.has(s.cinemaId)) byVenueDate.set(s.cinemaId, new Map());
+      const dateMap = byVenueDate.get(s.cinemaId);
+      if (!dateMap.has(s.dateIso)) dateMap.set(s.dateIso, new Map());
+      const mvMap = dateMap.get(s.dateIso);
+      if (!mvMap.has(mTitle)) mvMap.set(mTitle, new Map());
+      const fmtMap = mvMap.get(mTitle);
+      if (!fmtMap.has(s.format)) fmtMap.set(s.format, []);
+      fmtMap.get(s.format).push(s.startTime24);
+    }
+
+    for (const [cid, dateMap] of byVenueDate.entries()) {
+      const days = Array.from(dateMap.entries()).map(([isoDate, mvMap]) => ({
+        isoDate,
+        day: '',
+        date: isoDate,
+        movies: Array.from(mvMap.entries()).map(([name, fmtMap]) => ({
+          name,
+          showing: Array.from(fmtMap.entries()).map(([type, time]) => ({ type, time })),
+        })),
+      }));
+      prevVenueDaysMap.set(cid, {
+        fresh: serpAgeHours < SERP_AU_CACHE_TTL_HOURS,
+        futureDateCount: dateMap.size,
+        days,
+      });
+    }
+  } catch {
+    // No previous live_catalog.json yet
+  }
+
+  let anyUsedSerpCredit = false;
+  {
     const venueResults = [];
     const BATCH_SIZE = 6;
     for (let i = 0; i < auVenues.length; i += BATCH_SIZE) {
       const slice = auVenues.slice(i, i + BATCH_SIZE);
       const batchOut = await Promise.all(
         slice.map((v) =>
-          fetchCinemaShowtimesViaSerpApi(v, cfg.serpapiApiKey).catch(() => {
+          fetchCinemaShowtimesViaSerpApi(
+            v,
+            cfg.serpapiApiKey,
+            prevVenueDaysMap.get(v.id) || null
+          ).catch(() => {
             const tz = getTimeZoneForCity(v.city);
             const tIso = getLocalTodayIso(tz);
-            return { venue: v, todayIso: tIso, realTodayIso: tIso, days: [] };
+            return { venue: v, todayIso: tIso, realTodayIso: tIso, days: [], usedSerpCredit: false };
           })
         )
       );
       venueResults.push(...batchOut);
     }
 
-    for (const { venue, todayIso, realTodayIso, days } of venueResults) {
+    for (const { venue, todayIso, realTodayIso, days, usedSerpCredit } of venueResults) {
+      if (usedSerpCredit) anyUsedSerpCredit = true;
       const venueDefaultFormat = venue.id.includes('imax') ? 'IMAX' : 'Standard';
       const minDateIso = realTodayIso || todayIso;
 
       for (const dayBlock of days) {
-        const dateIso = resolveDayBlockDateIso(dayBlock, todayIso);
+        const dateIso = dayBlock.isoDate || resolveDayBlockDateIso(dayBlock, todayIso);
         if (!dateIso || dateIso < minDateIso) continue;
 
         const [y, m, d] = dateIso.split('-').map(Number);
@@ -2303,6 +2417,7 @@ export async function syncLiveCatalog() {
   const snapshot = {
     mode: 'live',
     syncedAtIso: nowIso,
+    serpSyncedAtIso: anyUsedSerpCredit ? nowIso : prevSerpSyncedAtIso || nowIso,
     ratingsSyncedAtIso: nowIso,
     configuredApis: {
       tmdb: true,
@@ -2318,7 +2433,16 @@ export async function syncLiveCatalog() {
   };
 
   await fs.mkdir(CACHE_DIR, { recursive: true });
-  await fs.writeFile(CACHE_FILE, JSON.stringify(snapshot, null, 2), 'utf-8');
+  const serializedSnapshot = JSON.stringify(snapshot, null, 2);
+  await fs.writeFile(CACHE_FILE, serializedSnapshot, 'utf-8');
+
+  // Keep static public/live_catalog.json synchronized for standalone static deployments
+  try {
+    const publicCatalogPath = path.join(PROJECT_ROOT, 'public', 'live_catalog.json');
+    await fs.writeFile(publicCatalogPath, serializedSnapshot, 'utf-8');
+  } catch {
+    // Ignore if public/ is absent in minimal runtime containers
+  }
   return snapshot;
 }
 

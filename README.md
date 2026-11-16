@@ -19,6 +19,9 @@ An editorial movie & cinema session discovery guide across **Melbourne (19 venue
   - Rolling 7-day calendar (with Cheap Tuesday highlights and automatic 15-minute grace window hiding past sessions today).
   - Individual Film & Cinema dropdowns, Chain, Suburb, Format (`IMAX`, `35mm / 70mm`, `Dolby Atmos`, `Gold Class / LUX`), Budget (`A$` / `¥`), and `Finish By` filters.
   - Tri-platform ratings (**IMDb**, **Rotten Tomatoes**, **Douban 豆瓣**), official YouTube trailer lightbox, 1-click **Google Calendar** export, shareable deep-link URLs, and **Folio** side-by-side session comparison.
+- **Automated Daily Session & Ratings Refresh**:
+  - **Server Scheduler (`server/index.mjs` + `server/syncCatalog.mjs`)**: Proactively checks catalog freshness (`syncedAtIso`) on startup and every 6 hours, refreshing Shanghai (Maoyan), IMAX Melbourne, Golden Age Sydney, TMDB films, and IMDb/RT/Douban ratings daily (`24h`) while using a quota-smart `84h` window (or `< 3` remaining days trigger) for SerpApi AU venues to stay comfortably inside free monthly limits.
+  - **GitHub Actions Daily Cron (`.github/workflows/daily-catalog-sync.yml`)**: Runs automatically every day at `20:15 UTC` (`07:15 AEDT` / `04:15 CST`) to commit updated session snapshots and trigger automatic Render redeployments.
 
 ---
 
