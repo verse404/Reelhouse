@@ -1,4 +1,4 @@
-# Cinema Guide — Version 1 (`v1.0.0`)
+# Reelhouse (`v1.0.0`)
 
 An editorial movie & cinema session discovery guide across **Melbourne (19 venues)**, **Sydney (16 venues)**, and **Shanghai · 上海 (15 venues)** — built with React 19, TypeScript, Vite, and a hardened Node.js Backend-for-Frontend (BFF).
 

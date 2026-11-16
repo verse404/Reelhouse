@@ -1,8 +1,8 @@
 {
-  "name": "cinema-guide-v1",
+  "name": "reelhouse",
   "private": true,
   "version": "1.0.0",
-  "description": "Cinema Guide Version 1 — Melbourne, Sydney & Shanghai Movie and Cinema Session Guide",
+  "description": "Reelhouse — Melbourne, Sydney & Shanghai Movie and Cinema Session Guide",
   "type": "module",
   "scripts": {
     "dev": "vite",
