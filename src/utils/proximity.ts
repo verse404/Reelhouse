@@ -319,6 +319,67 @@ export interface CinemaDistanceDisplay {
   fullSuffix: string; // e.g. "from Melbourne CBD" | "from your location" | "from South Yarra"
 }
 
+export const FALLBACK_CINEMA_COORDS: Record<string, [number, number]> = {
+  'mel-imax': [-37.8033, 144.9714],
+  'mel-lido': [-37.8213, 145.0359],
+  'mel-nova': [-37.7982, 144.9673],
+  'mel-classic': [-37.8842, 145.0022],
+  'mel-sun': [-37.8161, 144.8906],
+  'mel-cameo': [-37.9089, 145.3542],
+  'mel-astor': [-37.8573, 144.9912],
+  'mel-kino': [-37.8142, 144.9722],
+  'mel-como': [-37.8385, 144.9956],
+  'mel-westgarth': [-37.7801, 144.9978],
+  'mel-palace-pentridge': [-37.7418, 144.9708],
+  'mel-palace-balwyn': [-37.8127, 145.0785],
+  'mel-hoyts-mc': [-37.8103, 144.9629],
+  'mel-hoyts-chadstone': [-37.8858, 145.083],
+  'mel-hoyts-docklands': [-37.8124, 144.9383],
+  'mel-village-crown': [-37.824, 144.9583],
+  'mel-village-rivoli': [-37.8312, 145.0558],
+  'mel-village-doncaster': [-37.7848, 145.1252],
+  'mel-reading-burwood': [-37.8519, 145.1116],
+  'syd-imax': [-33.8732, 151.2012],
+  'syd-orpheum': [-33.829, 151.2274],
+  'syd-ritz': [-33.9195, 151.2422],
+  'syd-golden-age': [-33.8794, 151.2111],
+  'syd-event-george': [-33.8748, 151.2065],
+  'syd-event-parramatta': [-33.8176, 151.0025],
+  'syd-event-macquarie': [-33.7772, 151.1213],
+  'syd-dendy-newtown': [-33.897, 151.1792],
+  'syd-palace-norton': [-33.8856, 151.1569],
+  'syd-palace-central': [-33.8845, 151.2007],
+  'syd-event-burwood': [-33.8748, 151.1046],
+  'syd-hoyts-broadway': [-33.8835, 151.1948],
+  'syd-hoyts-chatswood': [-33.7969, 151.1834],
+  'syd-hoyts-eq': [-33.8919, 151.2256],
+  'syd-reading-rhodes': [-33.8323, 151.086],
+  'syd-united-warriewood': [-33.6946, 151.3005],
+  'sha-grand': [31.2331, 121.471],
+  'sha-sho': [31.2025, 121.4295],
+  'sha-cathay': [31.2182, 121.4614],
+  'sha-peace': [31.2326, 121.4763],
+  'sha-palace-iapm': [31.2155, 121.4575],
+  'sha-palace-raffles': [31.2532, 121.5071],
+  'sha-palace-oneeast': [31.1967, 121.4795],
+  'sha-premiere-kerry': [31.2237, 121.4488],
+  'sha-moviemovie-taikoo': [31.1523, 121.4826],
+  'sha-sfc-grandgateway': [31.195, 121.4365],
+  'sha-sfc-century': [31.2274, 121.5267],
+  'sha-ume-xintiandi': [31.219, 121.4755],
+  'sha-wanda-wujiaochang': [31.3012, 121.5134],
+  'sha-cgv-magnolia': [31.2496, 121.4989],
+  'sha-tianshan': [31.2115, 121.4043],
+};
+
+export function getCinemaCoords(cinema: Cinema): { lat: number; lng: number } | null {
+  if (typeof cinema.lat === 'number' && typeof cinema.lng === 'number') {
+    return { lat: cinema.lat, lng: cinema.lng };
+  }
+  const fb = FALLBACK_CINEMA_COORDS[cinema.id];
+  return fb ? { lat: fb[0], lng: fb[1] } : null;
+}
+
 export function getCinemaDistanceInfo(
   cinema: Cinema,
   origin: UserLocationOrigin
@@ -329,11 +390,8 @@ export function getCinemaDistanceInfo(
       : cinema.city === 'melbourne'
         ? 'Melbourne CBD'
         : 'Sydney CBD';
-  if (
-    !origin.isCustomOrigin ||
-    typeof cinema.lat !== 'number' ||
-    typeof cinema.lng !== 'number'
-  ) {
+  const coords = getCinemaCoords(cinema);
+  if (!origin.isCustomOrigin || !coords) {
     return {
       km: cinema.distanceFromCbdKm,
       compactSuffix: cinema.city === 'shanghai' ? 'People’s Sq' : 'CBD',
@@ -341,7 +399,7 @@ export function getCinemaDistanceInfo(
     };
   }
 
-  const km = computeHaversineKm(origin.lat, origin.lng, cinema.lat, cinema.lng);
+  const km = computeHaversineKm(origin.lat, origin.lng, coords.lat, coords.lng);
   if (origin.id === 'gps') {
     return {
       km,

@@ -4,7 +4,7 @@ export type CityTimeZone = 'Australia/Melbourne' | 'Australia/Sydney' | 'Asia/Sh
 
 export type CurrencyCode = 'AUD' | 'CNY';
 
-export type BrowseMode = 'movies' | 'cinemas';
+export type BrowseMode = 'movies' | 'cinemas' | 'map';
 
 export type ReleaseStatus = 'in_cinemas' | 'coming_soon';
 

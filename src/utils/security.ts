@@ -446,7 +446,7 @@ export function parseValidatedUrlFilters(search: string): Partial<FilterState> {
     }
 
     const mode = params.get('mode');
-    if (mode === 'movies' || mode === 'cinemas') {
+    if (mode === 'movies' || mode === 'cinemas' || mode === 'map') {
       out.browseMode = mode as BrowseMode;
     }
 
@@ -515,12 +515,49 @@ export function isAdminUrlFlagPresent(search: string): boolean {
 }
 
 /**
+ * Parses and strictly validates shared Folio session IDs (`?folio=id1,id2,...`).
+ */
+export function parseValidatedFolioIds(search: string): string[] {
+  try {
+    const raw = new URLSearchParams(search).get('folio');
+    if (!raw) return [];
+    const seen = new Set<string>();
+    const ids: string[] = [];
+    for (const part of raw.split(',')) {
+      const trimmed = part.trim();
+      if (SAFE_ID_REGEX.test(trimmed) && !seen.has(trimmed)) {
+        seen.add(trimmed);
+        ids.push(trimmed);
+        if (ids.length >= 6) break;
+      }
+    }
+    return ids;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Builds a clean, shareable absolute URL containing up to 6 shortlisted Folio sessions.
+ */
+export function buildShareableFolioUrl(city: CityId, sessionIds: string[]): string {
+  const safeIds = sessionIds.filter((id) => SAFE_ID_REGEX.test(id)).slice(0, 6);
+  const url = new URL(window.location.origin + window.location.pathname);
+  url.searchParams.set('city', city);
+  if (safeIds.length > 0) {
+    url.searchParams.set('folio', safeIds.join(','));
+  }
+  return url.toString();
+}
+
+/**
  * Serializes non-default filter selections into a clean, shareable URL query string.
  */
 export function buildShareableFilterQueryString(
   filters: FilterState,
   defaultTodayIso: string,
-  preserveAdmin = false
+  preserveAdmin = false,
+  activeFolioIds?: string[]
 ): string {
   const params = new URLSearchParams();
   if (preserveAdmin) {
@@ -556,6 +593,12 @@ export function buildShareableFilterQueryString(
   }
   if (filters.searchQuery.trim().length > 0) {
     params.set('q', filters.searchQuery.trim());
+  }
+  if (activeFolioIds && activeFolioIds.length > 0) {
+    const safeFolio = activeFolioIds.filter((id) => SAFE_ID_REGEX.test(id)).slice(0, 6);
+    if (safeFolio.length > 0) {
+      params.set('folio', safeFolio.join(','));
+    }
   }
   const str = params.toString();
   return str ? `?${str}` : '';

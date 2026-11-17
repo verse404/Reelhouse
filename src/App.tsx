@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { BookmarkCheck } from 'lucide-react';
+import { BookmarkCheck, Check, Link2 } from 'lucide-react';
 import { cinemaDataService } from './services/cinemaProvider';
 import type {
   BrowseMode,
@@ -16,12 +16,15 @@ import type {
 } from './types/cinema';
 import {
   buildShareableFilterQueryString,
+  buildShareableFolioUrl,
+  copyTextSafely,
   isAdminUrlFlagPresent,
   loadValidatedCity,
   loadValidatedEdition,
   loadValidatedFavoriteCinemas,
   loadValidatedShortlist,
   loadValidatedWatchlist,
+  parseValidatedFolioIds,
   parseValidatedUrlFilters,
   saveCityPreference,
   saveEditionPreference,
@@ -63,6 +66,7 @@ import {
   ShortlistDrawerModal,
   type HydratedShortlistItem,
 } from './components/ShortlistDrawerModal';
+import { CinemaMapView } from './components/CinemaMapView';
 
 function matchesTimeOfDay(minutesFromMidnight: number, bucket: TimeOfDay): boolean {
   if (bucket === 'all') return true;
@@ -138,7 +142,19 @@ export function App() {
   const [gpsStatus, setGpsStatus] = useState<'idle' | 'locating' | 'active' | 'blocked'>('idle');
   const [isLocationModalOpen, setIsLocationModalOpen] = useState(false);
 
-  const [shortlist, setShortlist] = useState<ShortlistEntry[]>(() => loadValidatedShortlist());
+  const [shortlist, setShortlist] = useState<ShortlistEntry[]>(() => {
+    const sharedIds = parseValidatedFolioIds(window.location.search);
+    if (sharedIds.length > 0) {
+      const seeded = sharedIds.map((sessionId, idx) => ({
+        sessionId,
+        votes: 1,
+        addedAtMs: Date.now() + idx,
+      }));
+      saveShortlist(seeded);
+      return seeded;
+    }
+    return loadValidatedShortlist();
+  });
   const [watchlist, setWatchlist] = useState<string[]>(() => loadValidatedWatchlist());
   const [favoriteCinemas, setFavoriteCinemas] = useState<string[]>(() =>
     loadValidatedFavoriteCinemas()
@@ -147,7 +163,10 @@ export function App() {
   const [selectedSession, setSelectedSession] = useState<ScreeningSession | null>(null);
   const [inspectedRatingsMovie, setInspectedRatingsMovie] = useState<Movie | null>(null);
   const [trailerMovie, setTrailerMovie] = useState<Movie | null>(null);
-  const [isShortlistOpen, setIsShortlistOpen] = useState(false);
+  const [isShortlistOpen, setIsShortlistOpen] = useState<boolean>(
+    () => parseValidatedFolioIds(window.location.search).length > 0
+  );
+  const [dockLinkCopied, setDockLinkCopied] = useState(false);
   const [isApiSettingsOpen, setIsApiSettingsOpen] = useState(false);
   const [isAdminMode] = useState<boolean>(() => isAdminUrlFlagPresent(window.location.search));
   const [syncStatus, setSyncStatus] = useState<LiveSyncStatus>(() =>
@@ -212,13 +231,20 @@ export function App() {
   // Keep browser URL query string in sync with active filters for 1-click sharing (zero page reload).
   useEffect(() => {
     const defaultToday = calendarDays[0]?.dateIso ?? filters.dateIso;
-    const qs = buildShareableFilterQueryString(filters, defaultToday, isAdminMode);
+    const activeFolioIds =
+      isShortlistOpen && shortlist.length > 0 ? shortlist.map((s) => s.sessionId) : undefined;
+    const qs = buildShareableFilterQueryString(
+      filters,
+      defaultToday,
+      isAdminMode,
+      activeFolioIds
+    );
     const nextRelativeUrl = `${window.location.pathname}${qs}${window.location.hash}`;
     const currentRelativeUrl = `${window.location.pathname}${window.location.search}${window.location.hash}`;
     if (nextRelativeUrl !== currentRelativeUrl) {
       window.history.replaceState(null, '', nextRelativeUrl);
     }
-  }, [filters, calendarDays, isAdminMode]);
+  }, [filters, calendarDays, isAdminMode, isShortlistOpen, shortlist]);
   const cityCinemas = useMemo(
     () => {
       void catalogRevision;
@@ -926,6 +952,7 @@ export function App() {
   };
 
   const hydratedShortlist = useMemo<HydratedShortlistItem[]>(() => {
+    void catalogRevision;
     const items: HydratedShortlistItem[] = [];
     for (const entry of shortlist) {
       const session = cinemaDataService.getSessionById(entry.sessionId);
@@ -936,7 +963,7 @@ export function App() {
       items.push({ entry, session, movie, cinema });
     }
     return items;
-  }, [shortlist, movieMap, allCinemasMap]);
+  }, [shortlist, movieMap, allCinemasMap, catalogRevision]);
 
   const selectedModalMovie = selectedSession
     ? movieMap.get(selectedSession.movieId) ?? null
@@ -1047,6 +1074,25 @@ export function App() {
             onJumpToCheapTuesday={handleJumpToCheapTuesday}
             onResetFilters={handleResetFilters}
           />
+        ) : filters.browseMode === 'map' ? (
+          <CinemaMapView
+            cityMeta={cityMeta}
+            edition={edition}
+            allCityCinemas={cityCinemas}
+            cinemaItems={cinemaBrowseItems}
+            userOrigin={userOrigin}
+            shortlistedIds={shortlistedIds}
+            favoriteCinemaIds={favoriteCinemaIds}
+            onSelectSession={setSelectedSession}
+            onToggleShortlist={handleToggleShortlist}
+            onToggleFavoriteCinema={handleToggleFavoriteCinema}
+            onInspectRatings={setInspectedRatingsMovie}
+            onWatchTrailer={setTrailerMovie}
+            onOpenLocationModal={handleOpenLocationModal}
+            onFilterByCinema={(cid) =>
+              handleUpdateFilters({ selectedCinemaId: cid, browseMode: 'cinemas' })
+            }
+          />
         ) : (
           <CinemaBrowseView
             items={cinemaBrowseItems}
@@ -1090,6 +1136,25 @@ export function App() {
             </div>
 
             <div className="floating-shortlist-dock__actions">
+              <button
+                type="button"
+                id="dock-share-folio-link-btn"
+                className="btn-secondary"
+                onClick={async () => {
+                  const url = buildShareableFolioUrl(
+                    filters.city,
+                    hydratedShortlist.map((h) => h.session.id)
+                  );
+                  const ok = await copyTextSafely(url);
+                  if (ok) {
+                    setDockLinkCopied(true);
+                    window.setTimeout(() => setDockLinkCopied(false), 2600);
+                  }
+                }}
+              >
+                {dockLinkCopied ? <Check size={14} /> : <Link2 size={14} />}
+                <span>{dockLinkCopied ? 'Folio Link Copied ✓' : 'Share Folio Link'}</span>
+              </button>
               <button
                 type="button"
                 id="dock-open-compare-btn"

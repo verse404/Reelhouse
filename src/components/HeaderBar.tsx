@@ -147,6 +147,15 @@ export function HeaderBar({
             >
               <span>Maisons</span>
             </button>
+            <button
+              type="button"
+              id="browse-mode-map"
+              className={`couture-tab ${browseMode === 'map' ? 'couture-tab--active' : ''}`}
+              aria-pressed={browseMode === 'map'}
+              onClick={() => onChangeBrowseMode('map')}
+            >
+              <span>Map</span>
+            </button>
           </div>
         </nav>
 

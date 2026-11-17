@@ -46,6 +46,7 @@ const STATIC_MIME_TYPES = {
   '.webp': 'image/webp',
   '.ico': 'image/x-icon',
   '.woff2': 'font/woff2',
+  '.webmanifest': 'application/manifest+json; charset=utf-8',
 };
 
 const SPA_SECURITY_HEADERS = {
@@ -53,7 +54,7 @@ const SPA_SECURITY_HEADERS = {
   'Referrer-Policy': 'strict-origin-when-cross-origin',
   'Permissions-Policy': 'camera=(), microphone=(), geolocation=(self)',
   'Content-Security-Policy':
-    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' https://image.tmdb.org data:; connect-src 'self'; frame-src https://www.youtube-nocookie.com https://www.youtube.com; frame-ancestors 'self'; object-src 'none'; base-uri 'self';",
+    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' https://image.tmdb.org https://*.basemaps.cartocdn.com data:; connect-src 'self'; frame-src https://www.youtube-nocookie.com https://www.youtube.com; frame-ancestors 'self'; object-src 'none'; base-uri 'self';",
 };
 
 function isAllowedOrigin(origin, requestHostHeader) {
@@ -271,6 +272,73 @@ const PORT =
   Number.parseInt(process.env.PORT || process.env.BFF_PORT || '3100', 10) || 3100;
 const BIND_HOST = process.env.CONTAINER_RUNTIME === '1' ? '0.0.0.0' : '127.0.0.1';
 
+function escapeHtmlAttr(str) {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+function injectDynamicOpenGraphTags(htmlText, req) {
+  const rawHost = String(req.headers['x-forwarded-host'] || req.headers.host || '').trim();
+  const safeHost = /^[a-zA-Z0-9.:-]+$/.test(rawHost) ? rawHost : '';
+  const proto = req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http';
+  const baseOrigin = safeHost ? `${proto}://${safeHost}` : '';
+
+  const reqUrl = new URL(req.url || '/', 'http://127.0.0.1');
+  const cityParam = reqUrl.searchParams.get('city');
+  const folioParam = reqUrl.searchParams.get('folio');
+
+  const cityLabel =
+    cityParam === 'shanghai'
+      ? 'Shanghai · 上海'
+      : cityParam === 'sydney'
+        ? 'Sydney, NSW'
+        : cityParam === 'melbourne'
+          ? 'Melbourne, VIC'
+          : 'Melbourne, Sydney & Shanghai';
+
+  let ogTitle = `REELHOUSE — ${cityLabel} Cinema Guide`;
+  let ogDesc =
+    '50 iconic cinemas · IMAX & 35mm/70mm · IMDb, Rotten Tomatoes & Douban ratings · Closest cinemas & group session comparison.';
+
+  if (folioParam) {
+    const count = folioParam.split(',').filter(Boolean).slice(0, 6).length;
+    if (count > 0) {
+      ogTitle = `Reelhouse Folio — Compare ${count} Shortlisted ${count === 1 ? 'Session' : 'Sessions'} (${cityLabel})`;
+      ogDesc =
+        'Open to compare film ratings, start & finish times, ticket prices, distances, and book side-by-side.';
+    }
+  }
+
+  let out = htmlText
+    .replace(
+      /(property="og:title"\s+content=")[^"]*(")/,
+      `$1${escapeHtmlAttr(ogTitle)}$2`
+    )
+    .replace(
+      /(name="twitter:title"\s+content=")[^"]*(")/,
+      `$1${escapeHtmlAttr(ogTitle)}$2`
+    )
+    .replace(
+      /(property="og:description"\s+content=")[^"]*(")/,
+      `$1${escapeHtmlAttr(ogDesc)}$2`
+    )
+    .replace(
+      /(name="twitter:description"\s+content=")[^"]*(")/,
+      `$1${escapeHtmlAttr(ogDesc)}$2`
+    );
+
+  if (baseOrigin) {
+    const absImage = escapeHtmlAttr(`${baseOrigin}/og-reelhouse.jpg`);
+    out = out
+      .replace(/(property="og:image"\s+content=")[^"]*(")/, `$1${absImage}$2`)
+      .replace(/(name="twitter:image"\s+content=")[^"]*(")/, `$1${absImage}$2`);
+  }
+  return out;
+}
+
 async function serveStaticSpaAsset(req, res, pathname) {
   const indexHtmlPath = path.join(DIST_DIR, 'index.html');
   let decodedPath = '/';
@@ -308,8 +376,11 @@ async function serveStaticSpaAsset(req, res, pathname) {
   }
 
   try {
-    const body = await fs.readFile(fileToServe);
+    let body = await fs.readFile(fileToServe);
     const ext = path.extname(fileToServe).toLowerCase();
+    if (fileToServe === indexHtmlPath) {
+      body = Buffer.from(injectDynamicOpenGraphTags(body.toString('utf-8'), req), 'utf-8');
+    }
     const contentType = STATIC_MIME_TYPES[ext] || 'application/octet-stream';
     const isHashedAsset = decodedPath.startsWith('/assets/');
     res.writeHead(200, {

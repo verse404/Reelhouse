@@ -9,7 +9,7 @@ const securityHeaders = {
   'Referrer-Policy': 'strict-origin-when-cross-origin',
   'Permissions-Policy': 'camera=(), microphone=(), geolocation=(self)',
   'Content-Security-Policy':
-    "frame-ancestors 'self'; frame-src https://www.youtube-nocookie.com https://www.youtube.com; object-src 'none'; base-uri 'self';",
+    "img-src 'self' https://image.tmdb.org https://*.basemaps.cartocdn.com data:; frame-ancestors 'self'; frame-src https://www.youtube-nocookie.com https://www.youtube.com; object-src 'none'; base-uri 'self';",
 };
 
 export default defineConfig({

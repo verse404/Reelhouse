@@ -5,6 +5,7 @@ import {
   Check,
   Copy,
   ExternalLink,
+  Link2,
   Navigation,
   Play,
   Sparkles,
@@ -32,6 +33,7 @@ import { getCinemaDistanceInfo, type UserLocationOrigin } from '../utils/proximi
 import {
   buildSafeGoogleCalendarUrl,
   buildSafeGoogleMapsUrl,
+  buildShareableFolioUrl,
   copyTextSafely,
   getSafeOutboundCinemaUrl,
 } from '../utils/security';
@@ -82,6 +84,7 @@ export function ShortlistDrawerModal({
   onWatchTrailer,
 }: ShortlistDrawerModalProps) {
   const [copiedFeedback, setCopiedFeedback] = useState(false);
+  const [copiedLinkFeedback, setCopiedLinkFeedback] = useState(false);
 
   useEffect(() => {
     if (!isOpen || hasTopOverlay) return;
@@ -106,8 +109,14 @@ export function ShortlistDrawerModal({
 
   const handleCopyGroupPlan = async () => {
     if (items.length === 0) return;
+    const shareUrl = buildShareableFolioUrl(
+      activeCity,
+      items.map((i) => i.session.id)
+    );
     const lines = [
-      '🎬 Movie Night Options (via Reelhouse):',
+      '🎬 Movie Night Options — Vote & Compare:',
+      shareUrl,
+      '',
       ...items.map((item, idx) => {
         const cityMeta = CITIES[item.session.city];
         const dayParts = formatCalendarChipParts(item.session.dateIso, cityMeta.timeZone);
@@ -147,6 +156,19 @@ export function ShortlistDrawerModal({
     }
   };
 
+  const handleShareFolioLink = async () => {
+    if (items.length === 0) return;
+    const shareUrl = buildShareableFolioUrl(
+      activeCity,
+      items.map((i) => i.session.id)
+    );
+    const ok = await copyTextSafely(shareUrl);
+    if (ok) {
+      setCopiedLinkFeedback(true);
+      window.setTimeout(() => setCopiedLinkFeedback(false), 2800);
+    }
+  };
+
   return (
     <div
       className="modal-backdrop"
@@ -174,12 +196,23 @@ export function ShortlistDrawerModal({
               <>
                 <button
                   type="button"
+                  id="share-folio-link-btn"
+                  className="btn-primary btn-primary--sm"
+                  onClick={handleShareFolioLink}
+                >
+                  {copiedLinkFeedback ? <Check size={14} /> : <Link2 size={14} />}
+                  <span>
+                    {copiedLinkFeedback ? 'Folio Link Copied ✓' : 'Share Folio Link'}
+                  </span>
+                </button>
+                <button
+                  type="button"
                   id="copy-group-plan-btn"
                   className="btn-secondary"
                   onClick={handleCopyGroupPlan}
                 >
                   {copiedFeedback ? <Check size={15} /> : <Copy size={15} />}
-                  <span>{copiedFeedback ? 'Copied Plan for Chat!' : 'Copy Options for Friends'}</span>
+                  <span>{copiedFeedback ? 'Copied Text + Link!' : 'Copy Text Summary'}</span>
                 </button>
                 <button
                   type="button"
