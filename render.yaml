@@ -1,10 +1,14 @@
-# Render.com Blueprint — 1-click Docker deployment from GitHub
+# Render.com Blueprint — Sleep-Friendly Free Tier Deployment
+# IMPORTANT: Do NOT point external uptime pingers (e.g. UptimeRobot) at this service!
+# Render shares 750 free instance hours/month across all apps in your account (Reelhouse + LiveEcho, etc.).
+# Letting Render sleep when nobody is browsing uses only ~10-15 hrs/month, while GitHub Actions
+# (.github/workflows/daily-catalog-sync.yml) runs the daily 7:15 AM Sydney sync for free on GitHub's runners.
 services:
   - type: web
     name: reelhouse
     runtime: docker
     plan: free
-    region: singapore # Closest Render region to Australia & Shanghai (or oregon)
+    region: singapore
     healthCheckPath: /api/healthz
     envVars:
       - key: NODE_ENV
@@ -15,15 +19,9 @@ services:
         value: "1"
       - key: CONTAINER_RUNTIME
         value: "1"
+      - key: GITHUB_CRON_MANAGED
+        value: "1"
       - key: CACHE_TTL_HOURS
         value: "24"
       - key: RATINGS_TTL_HOURS
         value: "24"
-      - key: TMDB_API_KEY
-        sync: false
-      - key: OMDB_API_KEY
-        sync: false
-      - key: MDBLIST_API_KEY
-        sync: false
-      - key: SERPAPI_API_KEY
-        sync: false

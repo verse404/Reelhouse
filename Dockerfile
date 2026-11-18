@@ -10,7 +10,9 @@ COPY public ./public
 COPY src ./src
 RUN npm run build
 
-# Stage 2: Hardened non-root production BFF + static SPA runtime (Render / Railway / Fly.io / Cloud Run)
+# Stage 2: Sleep-friendly production BFF + static SPA runtime (Render / Railway / Fly.io / Cloud Run)
+# Note: GITHUB_CRON_MANAGED=1 offloads all scheduled scraping to GitHub Actions so Render Free Tier
+# sleeps cleanly after 15m of idle time, preserving your shared 750 free hours/month across multiple apps.
 FROM node:20-alpine AS runner
 WORKDIR /app
 
@@ -18,6 +20,7 @@ ENV NODE_ENV=production \
     SERVE_STATIC=1 \
     PUBLIC_READONLY_MODE=1 \
     CONTAINER_RUNTIME=1 \
+    GITHUB_CRON_MANAGED=1 \
     PORT=8080 \
     CACHE_TTL_HOURS=24 \
     RATINGS_TTL_HOURS=24
@@ -30,8 +33,5 @@ RUN mkdir -p /app/server/cache && chown -R node:node /app/server/cache
 
 USER node
 EXPOSE 8080
-
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
-  CMD wget -qO- http://127.0.0.1:8080/api/healthz || exit 1
 
 CMD ["node", "./server/index.mjs"]

@@ -32,6 +32,9 @@ function allowRateLimit(remoteIp) {
 const DIST_DIR = path.join(PROJECT_ROOT, 'dist');
 const SERVE_STATIC = process.env.SERVE_STATIC === '1';
 const PUBLIC_READONLY_MODE = process.env.PUBLIC_READONLY_MODE === '1';
+// On Render Free Tier (750 shared hrs/mo across all account apps), let Render sleep when idle
+// and delegate all daily scraping/syncing to GitHub Actions (.github/workflows/daily-catalog-sync.yml).
+const GITHUB_CRON_MANAGED = process.env.GITHUB_CRON_MANAGED === '1';
 
 const STATIC_MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -207,20 +210,24 @@ async function getCachedOrFreshCatalog(forceSync = false) {
     serpapi: Boolean(cfg.serpapiApiKey),
   };
 
-  if (!cfg.tmdbApiKey) {
-    return {
-      mode: 'curated',
-      configuredApis,
-      syncedAtIso: null,
-    };
-  }
-
   if (!forceSync) {
     try {
       const stat = await fs.stat(CACHE_FILE);
       const raw = await fs.readFile(CACHE_FILE, 'utf-8');
       const parsed = JSON.parse(raw);
-      parsed.configuredApis = configuredApis;
+      parsed.configuredApis = {
+        tmdb: Boolean(cfg.tmdbApiKey || parsed.configuredApis?.tmdb),
+        omdb: Boolean(cfg.omdbApiKey || parsed.configuredApis?.omdb),
+        mdblist: Boolean(cfg.mdblistApiKey || parsed.configuredApis?.mdblist),
+        serpapi: Boolean(cfg.serpapiApiKey || parsed.configuredApis?.serpapi),
+      };
+
+      // When managed by GitHub Actions daily cron (Render Free Tier), serve the pre-baked
+      // catalog immediately in <2ms without running heavy in-container background scrapes,
+      // allowing Render to sleep cleanly when idle and preserve shared 750h/mo account hours.
+      if (GITHUB_CRON_MANAGED || !cfg.tmdbApiKey) {
+        return parsed;
+      }
 
       // Always measure true catalog age from syncedAtIso inside JSON rather than disk mtime
       // (container builds and git checkouts reset file mtime even when data is days old).
@@ -255,8 +262,16 @@ async function getCachedOrFreshCatalog(forceSync = false) {
       }
       return parsed;
     } catch {
-      // Fall through to initial sync
+      // Fall through if CACHE_FILE does not exist yet
     }
+  }
+
+  if (!cfg.tmdbApiKey || GITHUB_CRON_MANAGED) {
+    return {
+      mode: 'curated',
+      configuredApis,
+      syncedAtIso: null,
+    };
   }
 
   if (!inFlightSync) {
@@ -575,9 +590,10 @@ server.listen(PORT, BIND_HOST, () => {
     `[Reelhouse BFF] Listening on http://${BIND_HOST}:${PORT} (mode=${hasTmdb ? 'live-ready' : 'curated-fallback'}, static=${SERVE_STATIC})`
   );
 
-  // Built-in proactive daily session refresh: check on boot and every 6 hours in the background
-  // so fresh sessions are pulled automatically every day even before visitors arrive.
-  if (hasTmdb) {
+  // Built-in proactive daily session refresh for standalone local/dedicated servers.
+  // Disabled automatically when GITHUB_CRON_MANAGED=1 (Render Free Tier) so Render sleeps cleanly
+  // when nobody is browsing and all scheduled scraping runs on GitHub Actions instead.
+  if (hasTmdb && !GITHUB_CRON_MANAGED) {
     setTimeout(() => {
       getCachedOrFreshCatalog(false).catch(() => null);
     }, 2500).unref();
