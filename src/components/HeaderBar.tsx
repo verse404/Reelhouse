@@ -1,11 +1,13 @@
-import { KeyRound, LocateFixed, Sun, Moon } from 'lucide-react';
-import type { BrowseMode, CityId, ReleaseStatus } from '../types/cinema';
+import { KeyRound, Languages, LocateFixed, Sun, Moon } from 'lucide-react';
+import type { AppLanguage, BrowseMode, CityId, ReleaseStatus } from '../types/cinema';
+import { getUiText } from '../utils/i18n';
 import type { UserLocationOrigin } from '../utils/proximity';
 
 export type SalonEdition = 'noir' | 'ivoire';
 
 interface HeaderBarProps {
   city: CityId;
+  lang: AppLanguage;
   userOrigin: UserLocationOrigin;
   releaseStatus: ReleaseStatus;
   browseMode: BrowseMode;
@@ -16,6 +18,7 @@ interface HeaderBarProps {
   matchingSessionCount: number;
   comingSoonCount: number;
   onChangeCity: (city: CityId) => void;
+  onToggleLanguage: () => void;
   onChangeReleaseStatus: (status: ReleaseStatus) => void;
   onChangeBrowseMode: (mode: BrowseMode) => void;
   onOpenLocationModal: () => void;
@@ -27,6 +30,7 @@ interface HeaderBarProps {
 
 export function HeaderBar({
   city,
+  lang,
   userOrigin,
   releaseStatus,
   browseMode,
@@ -37,6 +41,7 @@ export function HeaderBar({
   matchingSessionCount,
   comingSoonCount,
   onChangeCity,
+  onToggleLanguage,
   onChangeReleaseStatus,
   onChangeBrowseMode,
   onOpenLocationModal,
@@ -46,6 +51,7 @@ export function HeaderBar({
   onResetHome,
 }: HeaderBarProps) {
   const formattedShortlistCount = String(shortlistCount).padStart(2, '0');
+  const t = getUiText(lang);
 
   return (
     <header className="site-header">
@@ -72,7 +78,7 @@ export function HeaderBar({
               aria-pressed={city === 'melbourne'}
               onClick={() => onChangeCity('melbourne')}
             >
-              <span>Melbourne</span>
+              <span>{t.cityNames.melbourne}</span>
               <small>VIC</small>
             </button>
             <button
@@ -82,7 +88,7 @@ export function HeaderBar({
               aria-pressed={city === 'sydney'}
               onClick={() => onChangeCity('sydney')}
             >
-              <span>Sydney</span>
+              <span>{t.cityNames.sydney}</span>
               <small>NSW</small>
             </button>
             <button
@@ -92,7 +98,7 @@ export function HeaderBar({
               aria-pressed={city === 'shanghai'}
               onClick={() => onChangeCity('shanghai')}
             >
-              <span>Shanghai</span>
+              <span>{t.cityNames.shanghai}</span>
               <small>SH · 沪</small>
             </button>
           </div>
@@ -110,7 +116,7 @@ export function HeaderBar({
               aria-pressed={releaseStatus === 'in_cinemas'}
               onClick={() => onChangeReleaseStatus('in_cinemas')}
             >
-              <span>In Cinemas</span>
+              <span>{t.inCinemas}</span>
             </button>
             <button
               type="button"
@@ -121,7 +127,7 @@ export function HeaderBar({
               aria-pressed={releaseStatus === 'coming_soon'}
               onClick={() => onChangeReleaseStatus('coming_soon')}
             >
-              <span>Coming Soon</span>
+              <span>{t.comingSoon}</span>
             </button>
           </div>
 
@@ -136,7 +142,7 @@ export function HeaderBar({
               aria-pressed={browseMode === 'movies'}
               onClick={() => onChangeBrowseMode('movies')}
             >
-              <span>Programme</span>
+              <span>{t.programme}</span>
             </button>
             <button
               type="button"
@@ -145,7 +151,7 @@ export function HeaderBar({
               aria-pressed={browseMode === 'cinemas'}
               onClick={() => onChangeBrowseMode('cinemas')}
             >
-              <span>Maisons</span>
+              <span>{t.maisons}</span>
             </button>
             <button
               type="button"
@@ -154,7 +160,7 @@ export function HeaderBar({
               aria-pressed={browseMode === 'map'}
               onClick={() => onChangeBrowseMode('map')}
             >
-              <span>Map</span>
+              <span>{t.map}</span>
             </button>
           </div>
         </nav>
@@ -162,8 +168,8 @@ export function HeaderBar({
         <div className="header-actions">
           <span className="header-session-tally" aria-live="polite">
             {releaseStatus === 'in_cinemas'
-              ? `${matchingSessionCount} ${matchingSessionCount === 1 ? 'session' : 'sessions'}`
-              : `${comingSoonCount} ${comingSoonCount === 1 ? 'premiere' : 'premieres'}`}
+              ? `${matchingSessionCount} ${matchingSessionCount === 1 ? t.sessionSingular : t.sessionPlural}`
+              : `${comingSoonCount} ${comingSoonCount === 1 ? t.premiereSingular : t.premierePlural}`}
           </span>
 
           <button
@@ -177,7 +183,7 @@ export function HeaderBar({
           >
             <LocateFixed size={12} aria-hidden="true" />
             <span>
-              {userOrigin.isCustomOrigin ? `NEAR: ${userOrigin.shortLabel}` : 'MY LOCATION'}
+              {userOrigin.isCustomOrigin ? `${t.nearPrefix}: ${userOrigin.shortLabel}` : t.myLocation}
             </span>
           </button>
 
@@ -193,6 +199,18 @@ export function HeaderBar({
               <span>{isLiveMode ? 'LIVE API ✓' : 'LIVE API'}</span>
             </button>
           )}
+
+          <button
+            type="button"
+            id="toggle-language-btn"
+            className={`edition-toggle ${lang === 'zh' ? 'edition-toggle--live' : ''}`}
+            onClick={onToggleLanguage}
+            aria-label={lang === 'en' ? 'Switch interface to 中文' : 'Switch interface to English'}
+            title="Switch Bilingual EN / 中文 Mode"
+          >
+            <Languages size={12} aria-hidden="true" />
+            <span>{lang === 'en' ? '中文' : 'EN'}</span>
+          </button>
 
           <button
             type="button"
@@ -218,7 +236,7 @@ export function HeaderBar({
             }`}
             onClick={onOpenShortlist}
           >
-            <span>FOLIO</span>
+            <span>{t.folio}</span>
             <span className="shortlist-trigger__badge">[{formattedShortlistCount}]</span>
           </button>
         </div>

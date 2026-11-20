@@ -12,10 +12,11 @@ import {
   Plus,
   Train,
 } from 'lucide-react';
-import type { Cinema, CityMeta, Movie, ScreeningSession } from '../types/cinema';
+import type { AppLanguage, Cinema, CityMeta, Movie, ScreeningSession } from '../types/cinema';
 import type { SalonEdition } from './HeaderBar';
 import type { CinemaWithMovieSessions } from './CinemaBrowseView';
 import { formatDistanceKm, formatRuntime } from '../utils/formatters';
+import { getDisplayCinemaName, getDisplayMovieTitle, getUiText } from '../utils/i18n';
 import {
   getCinemaCoords,
   getCinemaDistanceInfo,
@@ -32,6 +33,7 @@ import { SessionPill } from './SessionPill';
 
 interface CinemaMapViewProps {
   cityMeta: CityMeta;
+  lang?: AppLanguage;
   edition: SalonEdition;
   allCityCinemas: Cinema[];
   cinemaItems: CinemaWithMovieSessions[];
@@ -82,6 +84,7 @@ function getMetersPerPixel(lat: number, zoom: number): number {
 
 export function CinemaMapView({
   cityMeta,
+  lang = 'en',
   edition,
   allCityCinemas,
   cinemaItems,
@@ -97,6 +100,7 @@ export function CinemaMapView({
   onFilterByCinema,
 }: CinemaMapViewProps) {
   const isShanghai = cityMeta.id === 'shanghai';
+  const t = getUiText(lang);
   const originKey = `${cityMeta.id}:${userOrigin.id}:${userOrigin.lat.toFixed(3)}:${userOrigin.lng.toFixed(3)}`;
 
   const [camera, setCamera] = useState<{
@@ -511,7 +515,9 @@ export function CinemaMapView({
                 )}
               </div>
 
-              <h3 className="cinema-map-inspector__title">{activeSelectedVenue.cinema.name}</h3>
+              <h3 className="cinema-map-inspector__title">
+                {getDisplayCinemaName(activeSelectedVenue.cinema, lang)}
+              </h3>
               <p className="cinema-map-inspector__sub">
                 {activeSelectedVenue.cinema.suburb} ·{' '}
                 <strong>
@@ -544,8 +550,8 @@ export function CinemaMapView({
                   />
                   <span>
                     {favoriteCinemaIds.has(activeSelectedVenue.cinema.id)
-                      ? 'Favorited'
-                      : 'Favorite'}
+                      ? t.favorited
+                      : t.favorite}
                   </span>
                 </button>
 
@@ -568,7 +574,7 @@ export function CinemaMapView({
                   className="maps-action-btn"
                 >
                   <Navigation size={12} aria-hidden="true" />
-                  <span>{userOrigin.isCustomOrigin ? 'Directions' : 'Google Maps'}</span>
+                  <span>{userOrigin.isCustomOrigin ? t.directions : t.googleMaps}</span>
                   <ExternalLink size={11} aria-hidden="true" />
                 </a>
 
@@ -578,7 +584,7 @@ export function CinemaMapView({
                     className="maps-action-btn"
                     onClick={() => onFilterByCinema(activeSelectedVenue.cinema.id)}
                   >
-                    <span>Solo Filter</span>
+                    <span>{lang === 'zh' ? '只看此影院' : 'Solo Filter'}</span>
                   </button>
                 )}
               </div>
@@ -597,11 +603,7 @@ export function CinemaMapView({
                       <MoviePoster movie={movie} size="sm" />
                       <div className="map-film-block__info">
                         <h4 className="map-film-block__title">
-                          {isShanghai &&
-                          movie.ratings.douban.chineseTitle &&
-                          movie.ratings.douban.chineseTitle !== movie.title
-                            ? `${movie.title} · ${movie.ratings.douban.chineseTitle}`
-                            : movie.title}
+                          {getDisplayMovieTitle(movie, lang, isShanghai)}
                         </h4>
                         <p className="map-film-block__meta">
                           <span className="rating-badge">{movie.classification}</span>
@@ -624,7 +626,7 @@ export function CinemaMapView({
                               onClick={() => onWatchTrailer(movie)}
                             >
                               <Play size={10} aria-hidden="true" fill="currentColor" />
-                              <span>Trailer</span>
+                              <span>{t.trailer}</span>
                             </button>
                           )}
                         </div>
@@ -636,6 +638,7 @@ export function CinemaMapView({
                         <SessionPill
                           key={session.id}
                           session={session}
+                          lang={lang}
                           isShortlisted={shortlistedIds.has(session.id)}
                           onSelectSession={onSelectSession}
                           onToggleShortlist={onToggleShortlist}

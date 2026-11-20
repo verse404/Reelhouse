@@ -1,0 +1,17 @@
+{
+  "watchTitleKeywords": [
+    "Odyssey",
+    "Dune",
+    "Eyes Wide Shut",
+    "2001: A Space Odyssey"
+  ],
+  "watchFormats": [
+    "35mm / 70mm"
+  ],
+  "watchVenueIds": [
+    "mel-imax",
+    "mel-astor",
+    "sha-grand"
+  ],
+  "maxAlertsPerRun": 10
+}

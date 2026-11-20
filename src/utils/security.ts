@@ -1,4 +1,5 @@
 import type {
+  AppLanguage,
   BrowseMode,
   CityId,
   CityTimeZone,
@@ -209,6 +210,7 @@ const WATCHLIST_STORAGE_KEY = 'reelhouse_watchlist_v1';
 const FAVORITE_CINEMAS_STORAGE_KEY = 'reelhouse_fav_cinemas_v1';
 const CITY_STORAGE_KEY = 'reelhouse_city_v1';
 const EDITION_STORAGE_KEY = 'reelhouse_edition_v1';
+const LANGUAGE_STORAGE_KEY = 'reelhouse_lang_v1';
 
 // Safe session ID pattern: lowercase alphanumeric + hyphens/underscores
 const SAFE_ID_REGEX = /^[a-z0-9_-]{3,96}$/i;
@@ -296,6 +298,32 @@ export function loadValidatedEdition(): 'noir' | 'ivoire' {
 export function saveEditionPreference(edition: 'noir' | 'ivoire'): void {
   try {
     window.localStorage.setItem(EDITION_STORAGE_KEY, edition);
+  } catch {
+    // Ignore storage errors
+  }
+}
+
+export function loadValidatedLanguage(search = ''): AppLanguage {
+  try {
+    if (search) {
+      const urlLang = new URLSearchParams(search).get('lang');
+      if (urlLang === 'zh' || urlLang === 'en') {
+        return urlLang;
+      }
+    }
+    const raw = window.localStorage.getItem(LANGUAGE_STORAGE_KEY);
+    if (raw === 'zh' || raw === 'en') {
+      return raw;
+    }
+    return 'en';
+  } catch {
+    return 'en';
+  }
+}
+
+export function saveLanguagePreference(lang: AppLanguage): void {
+  try {
+    window.localStorage.setItem(LANGUAGE_STORAGE_KEY, lang);
   } catch {
     // Ignore storage errors
   }
@@ -428,6 +456,130 @@ export function buildSafeGoogleCalendarUrl(input: GoogleCalendarSessionInput): s
   return calUrl.toString();
 }
 
+function escapeIcsText(raw: string): string {
+  // Strip unsafe ASCII control characters (keeping \n for escaped line breaks) and escape RFC 5545 delimiters.
+  let clean = '';
+  for (const ch of String(raw || '')) {
+    const code = ch.charCodeAt(0);
+    if (ch === '\n' || (code >= 0x20 && code !== 0x7f)) {
+      clean += ch;
+    }
+  }
+  return clean
+    .replace(/\\/g, '\\\\')
+    .replace(/;/g, '\\;')
+    .replace(/,/g, '\\,')
+    .replace(/\r?\n/g, '\\n');
+}
+
+function getTzWallClockComponents(utcMs: number, timeZone: CityTimeZone): number {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(new Date(utcMs));
+  const getNum = (t: string) => Number.parseInt(parts.find((p) => p.type === t)?.value ?? '0', 10);
+  const h = getNum('hour') % 24;
+  return Date.UTC(getNum('year'), getNum('month') - 1, getNum('day'), h, getNum('minute'), 0);
+}
+
+function formatUtcIcsStamp(utcMs: number): string {
+  const dt = new Date(utcMs);
+  const y = String(dt.getUTCFullYear()).padStart(4, '0');
+  const mo = String(dt.getUTCMonth() + 1).padStart(2, '0');
+  const d = String(dt.getUTCDate()).padStart(2, '0');
+  const h = String(dt.getUTCHours()).padStart(2, '0');
+  const m = String(dt.getUTCMinutes()).padStart(2, '0');
+  return `${y}${mo}${d}T${h}${m}00Z`;
+}
+
+function localWallMinutesToUtcMs(
+  dateIso: string,
+  totalMinutesFromStartDay: number,
+  timeZone: CityTimeZone
+): number {
+  const [y, m, d] = dateIso.split('-').map(Number);
+  const targetWallMs = Date.UTC(y, m - 1, d, 0, totalMinutesFromStartDay, 0);
+  let guessUtc = targetWallMs;
+  for (let i = 0; i < 2; i++) {
+    const representedWallMs = getTzWallClockComponents(guessUtc, timeZone);
+    guessUtc += targetWallMs - representedWallMs;
+  }
+  return guessUtc;
+}
+
+/**
+ * Generates an RFC 5545 `.ics` calendar invite compatible with Apple Calendar, iOS, macOS,
+ * Outlook, and Google Calendar, accurately converting city local time (incl. DST) to UTC.
+ */
+export function buildSafeIcsContent(input: GoogleCalendarSessionInput): string {
+  const startUtcMs = localWallMinutesToUtcMs(
+    input.dateIso,
+    input.startMinutesFromMidnight,
+    input.timeZone
+  );
+  const endUtcMs = startUtcMs + (input.runtimeMinutes + 15) * 60_000;
+  const nowUtcMs = Date.now();
+  const safeUidSlug = `${input.dateIso}-${input.startMinutesFromMidnight}-${input.cinemaName}`
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .slice(0, 48);
+
+  const descParts = [
+    `${input.movieTitle} — Directed by ${input.director}`,
+    `Format: ${input.format} (${input.auditoriumName})`,
+    'Includes ~15 minutes of pre-feature previews/trailers.',
+  ];
+  if (input.bookingUrl) {
+    descParts.push(`Tickets & Venue: ${input.bookingUrl}`);
+  }
+
+  const lines = [
+    'BEGIN:VCALENDAR',
+    'VERSION:2.0',
+    'PRODID:-//Reelhouse//Cinema Guide//EN',
+    'CALSCALE:GREGORIAN',
+    'METHOD:PUBLISH',
+    'BEGIN:VEVENT',
+    `UID:${safeUidSlug}@reelhouse.app`,
+    `DTSTAMP:${formatUtcIcsStamp(nowUtcMs)}`,
+    `DTSTART:${formatUtcIcsStamp(startUtcMs)}`,
+    `DTEND:${formatUtcIcsStamp(endUtcMs)}`,
+    `SUMMARY:${escapeIcsText(`${input.movieTitle} (${input.format}) — ${input.cinemaName}`)}`,
+    `LOCATION:${escapeIcsText(`${input.cinemaName}, ${input.address}`)}`,
+    `DESCRIPTION:${escapeIcsText(descParts.join('\n'))}`,
+    ...(input.bookingUrl ? [`URL:${input.bookingUrl}`] : []),
+    'END:VEVENT',
+    'END:VCALENDAR',
+  ];
+  return `${lines.join('\r\n')}\r\n`;
+}
+
+/**
+ * Triggers a safe client-side `.ics` download for Apple Calendar / Outlook without touching servers.
+ */
+export function downloadIcsFile(input: GoogleCalendarSessionInput): void {
+  const icsBody = buildSafeIcsContent(input);
+  const blob = new Blob([icsBody], { type: 'text/calendar;charset=utf-8' });
+  const objectUrl = URL.createObjectURL(blob);
+  const slug = `${input.movieTitle}-${input.dateIso}`
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 48);
+  const link = document.createElement('a');
+  link.href = objectUrl;
+  link.download = `${slug || 'reelhouse-screening'}.ics`;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1500);
+}
+
 /**
  * Parses and strictly validates shareable URL query parameters (`?city=...&date=...&film=...&cinema=...`).
  */
@@ -491,6 +643,14 @@ export function parseValidatedUrlFilters(search: string): Partial<FilterState> {
       out.finishBy = finish as FinishByOption;
     }
 
+    if (params.get('deals') === '1') {
+      out.dealsOnly = true;
+    }
+
+    if (params.get('makeit') === '1') {
+      out.makeItOnly = true;
+    }
+
     const q = params.get('q');
     if (q) {
       out.searchQuery = sanitizeSearchQuery(q);
@@ -514,38 +674,74 @@ export function isAdminUrlFlagPresent(search: string): boolean {
   }
 }
 
+export interface ParsedFolioUrlEntry {
+  sessionId: string;
+  votes: number;
+}
+
+const FOLIO_TOKEN_REGEX = /^([a-z0-9_-]{3,96})(?::(\d{1,2}))?$/i;
+
 /**
- * Parses and strictly validates shared Folio session IDs (`?folio=id1,id2,...`).
+ * Parses and strictly validates shared Folio session tokens (`?folio=id1,id2` or `?folio=id1:3,id2:1`).
  */
-export function parseValidatedFolioIds(search: string): string[] {
+export function parseValidatedFolioEntries(search: string): ParsedFolioUrlEntry[] {
   try {
     const raw = new URLSearchParams(search).get('folio');
     if (!raw) return [];
     const seen = new Set<string>();
-    const ids: string[] = [];
+    const entries: ParsedFolioUrlEntry[] = [];
     for (const part of raw.split(',')) {
-      const trimmed = part.trim();
-      if (SAFE_ID_REGEX.test(trimmed) && !seen.has(trimmed)) {
-        seen.add(trimmed);
-        ids.push(trimmed);
-        if (ids.length >= 6) break;
+      const m = part.trim().match(FOLIO_TOKEN_REGEX);
+      if (!m) continue;
+      const id = m[1];
+      const parsedVotes = m[2] ? Number.parseInt(m[2], 10) : 1;
+      const votes = Number.isFinite(parsedVotes) ? Math.max(1, Math.min(99, parsedVotes)) : 1;
+      if (SAFE_ID_REGEX.test(id) && !seen.has(id)) {
+        seen.add(id);
+        entries.push({ sessionId: id, votes });
+        if (entries.length >= 6) break;
       }
     }
-    return ids;
+    return entries;
   } catch {
     return [];
   }
 }
 
 /**
- * Builds a clean, shareable absolute URL containing up to 6 shortlisted Folio sessions.
+ * Parses and strictly validates shared Folio session IDs (`?folio=id1,id2,...`).
  */
-export function buildShareableFolioUrl(city: CityId, sessionIds: string[]): string {
-  const safeIds = sessionIds.filter((id) => SAFE_ID_REGEX.test(id)).slice(0, 6);
+export function parseValidatedFolioIds(search: string): string[] {
+  return parseValidatedFolioEntries(search).map((e) => e.sessionId);
+}
+
+export type FolioShareInput = string | { sessionId: string; votes?: number };
+
+/**
+ * Builds a clean, shareable absolute URL containing up to 6 shortlisted Folio sessions
+ * (optionally preserving group vote counts via `id:votes` tokens).
+ */
+export function buildShareableFolioUrl(
+  city: CityId,
+  items: FolioShareInput[],
+  lang?: AppLanguage,
+  includeVotes = false
+): string {
+  const tokens: string[] = [];
+  for (const item of items.slice(0, 6)) {
+    const sid = typeof item === 'string' ? item : item.sessionId;
+    if (!SAFE_ID_REGEX.test(sid)) continue;
+    const rawVotes = typeof item === 'string' ? 1 : item.votes ?? 1;
+    const clampedVotes = Math.max(1, Math.min(99, Math.floor(rawVotes)));
+    tokens.push(includeVotes || clampedVotes > 1 ? `${sid}:${clampedVotes}` : sid);
+  }
   const url = new URL(window.location.origin + window.location.pathname);
   url.searchParams.set('city', city);
-  if (safeIds.length > 0) {
-    url.searchParams.set('folio', safeIds.join(','));
+  if (lang === 'zh') {
+    url.searchParams.set('lang', 'zh');
+  }
+  if (tokens.length > 0) {
+    url.searchParams.set('folio', tokens.join(','));
   }
   return url.toString();
 }
@@ -557,13 +753,17 @@ export function buildShareableFilterQueryString(
   filters: FilterState,
   defaultTodayIso: string,
   preserveAdmin = false,
-  activeFolioIds?: string[]
+  activeFolioItems?: FolioShareInput[],
+  lang: AppLanguage = 'en'
 ): string {
   const params = new URLSearchParams();
   if (preserveAdmin) {
     params.set('admin', '1');
   }
   params.set('city', filters.city);
+  if (lang === 'zh') {
+    params.set('lang', 'zh');
+  }
   if (filters.releaseStatus !== 'in_cinemas') {
     params.set('status', filters.releaseStatus);
   }
@@ -591,13 +791,26 @@ export function buildShareableFilterQueryString(
   if (filters.releaseStatus === 'in_cinemas' && filters.finishBy !== 'all') {
     params.set('finish', filters.finishBy);
   }
+  if (filters.releaseStatus === 'in_cinemas' && filters.dealsOnly) {
+    params.set('deals', '1');
+  }
+  if (filters.releaseStatus === 'in_cinemas' && filters.makeItOnly) {
+    params.set('makeit', '1');
+  }
   if (filters.searchQuery.trim().length > 0) {
     params.set('q', filters.searchQuery.trim());
   }
-  if (activeFolioIds && activeFolioIds.length > 0) {
-    const safeFolio = activeFolioIds.filter((id) => SAFE_ID_REGEX.test(id)).slice(0, 6);
-    if (safeFolio.length > 0) {
-      params.set('folio', safeFolio.join(','));
+  if (activeFolioItems && activeFolioItems.length > 0) {
+    const tokens: string[] = [];
+    for (const item of activeFolioItems.slice(0, 6)) {
+      const sid = typeof item === 'string' ? item : item.sessionId;
+      if (!SAFE_ID_REGEX.test(sid)) continue;
+      const v = typeof item === 'string' ? 1 : item.votes ?? 1;
+      const clamped = Math.max(1, Math.min(99, Math.floor(v)));
+      tokens.push(clamped > 1 ? `${sid}:${clamped}` : sid);
+    }
+    if (tokens.length > 0) {
+      params.set('folio', tokens.join(','));
     }
   }
   const str = params.toString();

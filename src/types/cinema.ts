@@ -4,6 +4,8 @@ export type CityTimeZone = 'Australia/Melbourne' | 'Australia/Sydney' | 'Asia/Sh
 
 export type CurrencyCode = 'AUD' | 'CNY';
 
+export type AppLanguage = 'en' | 'zh';
+
 export type BrowseMode = 'movies' | 'cinemas' | 'map';
 
 export type ReleaseStatus = 'in_cinemas' | 'coming_soon';
@@ -148,6 +150,8 @@ export interface Movie {
   languageNote: string;
   tagline: string;
   synopsis: string;
+  chineseTagline?: string;
+  chineseSynopsis?: string;
   editorialPickReason?: string;
   isFeaturedMarquee?: boolean;
   posterTheme: PosterThemeId;
@@ -204,6 +208,7 @@ export interface FilterState {
   finishBy: FinishByOption;
   nearHubId: string; // 'cbd' | 'gps' | city neighborhood hub id
   dealsOnly: boolean;
+  makeItOnly: boolean;
   showPastToday: boolean;
   searchQuery: string;
 }

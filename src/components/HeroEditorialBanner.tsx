@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { ArrowUpRight, ChevronLeft, ChevronRight, LocateFixed } from 'lucide-react';
-import type { CityId, CityMeta, Movie } from '../types/cinema';
+import type { AppLanguage, CityId, CityMeta, Movie } from '../types/cinema';
+import { getDisplayMovieTitle, getUiText } from '../utils/i18n';
 import type { UserLocationOrigin } from '../utils/proximity';
 
 interface CityPhotoPlate {
@@ -75,6 +76,7 @@ const CITY_GALLERY_PLATES: Record<CityId, CityPhotoPlate[]> = {
 
 interface HeroEditorialBannerProps {
   cityMeta: CityMeta;
+  lang?: AppLanguage;
   userOrigin: UserLocationOrigin;
   featuredMovies: Movie[];
   activeSearchQuery: string;
@@ -86,12 +88,15 @@ const ROMAN_PLATES = ['I', 'II', 'III', 'IV'];
 
 export function HeroEditorialBanner({
   cityMeta,
+  lang = 'en',
   userOrigin,
   featuredMovies,
   activeSearchQuery,
   onFocusMovieTitle,
   onOpenLocationModal,
 }: HeroEditorialBannerProps) {
+  const t = getUiText(lang);
+  const displayCityName = t.cityNames[cityMeta.id] ?? cityMeta.name;
   const [plateState, setPlateState] = useState<{
     city: CityId;
     idx: number;
@@ -117,7 +122,9 @@ export function HeroEditorialBanner({
           </div>
 
           <h1 id="page-hero-heading" className="editorial-masthead__title">
-            Cinema, <em>curated</em> for the {cityMeta.name} evening.
+            {t.heroTitlePrefix}
+            <em>{t.heroTitleEmphasis}</em>
+            {lang === 'zh' ? ` · ${displayCityName}${t.heroTitleSuffix}` : ` for the ${cityMeta.name}${t.heroTitleSuffix}`}
           </h1>
 
           <p className="editorial-masthead__lead">
@@ -136,8 +143,8 @@ export function HeroEditorialBanner({
               <LocateFixed size={14} aria-hidden="true" />
               <span>
                 {userOrigin.isCustomOrigin
-                  ? `My Location: ${userOrigin.shortLabel} · Change`
-                  : `Find Closest ${cityMeta.name} Cinemas Around Me`}
+                  ? t.heroChangeLocation(userOrigin.shortLabel)
+                  : t.heroFindClosest(displayCityName)}
               </span>
             </button>
           </div>
@@ -216,19 +223,20 @@ export function HeroEditorialBanner({
       <div className="curated-triptych" aria-label="La Sélection — Curator highlights">
         <div className="curated-triptych__label-col">
           <span className="curated-triptych__kicker">LA SÉLECTION</span>
-          <span className="curated-triptych__sub">Essential Works Tonight</span>
+          <span className="curated-triptych__sub">
+            {lang === 'zh' ? '今晚精选必看影片' : 'Essential Works Tonight'}
+          </span>
         </div>
 
         <div className="curated-triptych__plates">
           {featuredMovies.map((movie, idx) => {
             const isFocused =
               activeSearchQuery.trim().toLowerCase() === movie.title.toLowerCase();
-            const displayTitle =
-              cityMeta.id === 'shanghai' &&
-              movie.ratings.douban.chineseTitle &&
-              movie.ratings.douban.chineseTitle !== movie.title
-                ? `${movie.title} · ${movie.ratings.douban.chineseTitle}`
-                : movie.title;
+            const displayTitle = getDisplayMovieTitle(
+              movie,
+              lang,
+              cityMeta.id === 'shanghai'
+            );
             return (
               <button
                 key={movie.id}

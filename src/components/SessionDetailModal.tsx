@@ -4,7 +4,9 @@ import {
   CalendarPlus,
   Check,
   Clock,
+  Download,
   ExternalLink,
+  Film,
   Heart,
   MapPin,
   Navigation,
@@ -15,7 +17,7 @@ import {
   Wine,
   X,
 } from 'lucide-react';
-import type { Cinema, CityMeta, Movie, ScreeningSession } from '../types/cinema';
+import type { AppLanguage, Cinema, CityMeta, Movie, ScreeningSession } from '../types/cinema';
 import {
   formatCalendarChipParts,
   formatDistanceKm,
@@ -23,11 +25,14 @@ import {
   formatSessionPrice,
   formatSessionWindow,
 } from '../utils/formatters';
+import { getDisplayCinemaName, getDisplayMovieTitle, getUiText } from '../utils/i18n';
+import { findDoubleFeatureCandidates } from '../utils/planner';
 import { getCinemaDistanceInfo, type UserLocationOrigin } from '../utils/proximity';
 import {
   buildSafeGoogleCalendarUrl,
   buildSafeGoogleMapsDirectionsUrl,
   buildSafeGoogleMapsUrl,
+  downloadIcsFile,
   getSafeOutboundCinemaUrl,
 } from '../utils/security';
 import { MoviePoster } from './MoviePoster';
@@ -38,12 +43,19 @@ interface SessionDetailModalProps {
   movie: Movie | null;
   cinema: Cinema | null;
   cityMeta: CityMeta;
+  lang?: AppLanguage;
   userOrigin: UserLocationOrigin;
   isShortlisted: boolean;
   isFavoriteCinema: boolean;
+  sameDaySessions?: ScreeningSession[];
+  movieMap?: Map<string, Movie>;
+  cinemaMap?: Map<string, Cinema>;
+  shortlistedIds?: Set<string>;
   hasTopOverlay?: boolean;
   onClose: () => void;
   onToggleShortlist: (sessionId: string) => void;
+  onPinPairToShortlist?: (sessionIds: string[]) => void;
+  onSelectSession?: (session: ScreeningSession) => void;
   onToggleFavoriteCinema: (cinemaId: string) => void;
   onInspectRatings: (movie: Movie) => void;
   onWatchTrailer: (movie: Movie) => void;
@@ -54,12 +66,19 @@ export function SessionDetailModal({
   movie,
   cinema,
   cityMeta,
+  lang = 'en',
   userOrigin,
   isShortlisted,
   isFavoriteCinema,
+  sameDaySessions = [],
+  movieMap,
+  cinemaMap,
+  shortlistedIds,
   hasTopOverlay = false,
   onClose,
   onToggleShortlist,
+  onPinPairToShortlist,
+  onSelectSession,
   onToggleFavoriteCinema,
   onInspectRatings,
   onWatchTrailer,
@@ -77,7 +96,9 @@ export function SessionDetailModal({
 
   if (!session || !movie || !cinema) return null;
 
-  const dateParts = formatCalendarChipParts(session.dateIso, cityMeta.timeZone);
+  const t = getUiText(lang);
+  const displayCityName = t.cityNames[cityMeta.id] ?? cityMeta.name;
+  const dateParts = formatCalendarChipParts(session.dateIso, cityMeta.timeZone, lang);
   const timeWindow = formatSessionWindow(
     session.startMinutesFromMidnight,
     movie.runtimeMinutes
@@ -91,7 +112,7 @@ export function SessionDetailModal({
         cinema.address
       )
     : buildSafeGoogleMapsUrl(cinema.name, cinema.address);
-  const googleCalendarUrl = buildSafeGoogleCalendarUrl({
+  const calendarInput = {
     movieTitle: movie.title,
     director: movie.director,
     format: session.format,
@@ -103,16 +124,25 @@ export function SessionDetailModal({
     runtimeMinutes: movie.runtimeMinutes,
     timeZone: cityMeta.timeZone,
     bookingUrl: safeBookingUrl,
-  });
+  };
+  const googleCalendarUrl = buildSafeGoogleCalendarUrl(calendarInput);
   const savings = session.regularPriceAud - session.priceAud;
   const sessionCurrency = session.currency ?? cityMeta.currency;
   const dist = getCinemaDistanceInfo(cinema, userOrigin);
-  const displayMovieTitle =
-    cityMeta.id === 'shanghai' &&
-    movie.ratings.douban.chineseTitle &&
-    movie.ratings.douban.chineseTitle !== movie.title
-      ? `${movie.title} · ${movie.ratings.douban.chineseTitle}`
-      : movie.title;
+  const displayMovieTitle = getDisplayMovieTitle(movie, lang, cityMeta.id === 'shanghai');
+  const displayCinemaName = getDisplayCinemaName(cinema, lang);
+  const doubleFeatureCandidates =
+    movieMap && cinemaMap && sameDaySessions.length > 0
+      ? findDoubleFeatureCandidates({
+          firstSession: session,
+          firstMovie: movie,
+          firstCinema: cinema,
+          sameDaySessions,
+          movieMap,
+          cinemaMap,
+          maxResults: 3,
+        })
+      : [];
 
   return (
     <div
@@ -131,7 +161,11 @@ export function SessionDetailModal({
         <div className="modal-sheet__header">
           <div className="ticket-kicker">
             <Ticket size={15} aria-hidden="true" />
-            <span>Screening Summary · {cityMeta.name}</span>
+            <span>
+              {lang === 'zh'
+                ? `排片详情 · ${displayCityName}`
+                : `Screening Summary · ${cityMeta.name}`}
+            </span>
           </div>
           <button
             type="button"
@@ -259,7 +293,7 @@ export function SessionDetailModal({
                   aria-hidden="true"
                   fill={isFavoriteCinema ? 'currentColor' : 'none'}
                 />
-                <span>{isFavoriteCinema ? 'Favorited' : 'Favorite'}</span>
+                <span>{isFavoriteCinema ? t.favorited : t.favorite}</span>
               </button>
 
               <a
@@ -268,10 +302,10 @@ export function SessionDetailModal({
                 rel="noopener noreferrer"
                 id="modal-google-maps-link"
                 className="maps-action-btn"
-                aria-label={`Open ${cinema.name} in Google Maps`}
+                aria-label={`Open ${displayCinemaName} in Google Maps`}
               >
                 <Navigation size={12} aria-hidden="true" />
-                <span>{userOrigin.isCustomOrigin ? 'Directions' : 'Google Maps'}</span>
+                <span>{userOrigin.isCustomOrigin ? t.directions : t.googleMaps}</span>
                 <ExternalLink size={11} aria-hidden="true" />
               </a>
 
@@ -281,12 +315,23 @@ export function SessionDetailModal({
                 rel="noopener noreferrer"
                 id="modal-google-calendar-link"
                 className="maps-action-btn"
-                aria-label={`Add ${movie.title} at ${cinema.name} to Google Calendar`}
+                aria-label={`Add ${displayMovieTitle} at ${displayCinemaName} to Google Calendar`}
               >
                 <CalendarPlus size={12} aria-hidden="true" />
-                <span>Google Calendar</span>
+                <span>{t.googleCalendar}</span>
                 <ExternalLink size={11} aria-hidden="true" />
               </a>
+
+              <button
+                type="button"
+                id="modal-download-ics-btn"
+                className="maps-action-btn ics-btn"
+                onClick={() => downloadIcsFile(calendarInput)}
+                title="Download .ics calendar invite for Apple Calendar & Outlook"
+              >
+                <Download size={12} aria-hidden="true" />
+                <span>{t.appleIcs}</span>
+              </button>
             </div>
           </div>
           <p>
@@ -308,6 +353,89 @@ export function SessionDetailModal({
           )}
         </div>
 
+        {/* Double Feature Matchmaker */}
+        {sameDaySessions.length > 0 && (
+          <section className="double-feature-panel" aria-label={t.doubleFeatureTitle}>
+            <div className="double-feature-panel__head">
+              <div>
+                <h3 className="double-feature-panel__title">
+                  <Film size={14} aria-hidden="true" />
+                  <span>{t.doubleFeatureTitle}</span>
+                </h3>
+                <p className="double-feature-panel__sub">{t.doubleFeatureSub}</p>
+              </div>
+            </div>
+
+            {doubleFeatureCandidates.length === 0 ? (
+              <p className="double-feature-panel__empty">{t.doubleFeatureEmpty}</p>
+            ) : (
+              <div className="double-feature-grid">
+                {doubleFeatureCandidates.map((cand) => {
+                  const candTitle = getDisplayMovieTitle(
+                    cand.movie,
+                    lang,
+                    cityMeta.id === 'shanghai'
+                  );
+                  const candCinemaName = getDisplayCinemaName(cand.cinema, lang);
+                  const candWindow = formatSessionWindow(
+                    cand.session.startMinutesFromMidnight,
+                    cand.movie.runtimeMinutes
+                  );
+                  const candCurrency = cand.session.currency ?? sessionCurrency;
+                  const bothPinned = Boolean(
+                    shortlistedIds?.has(session.id) && shortlistedIds?.has(cand.session.id)
+                  );
+                  return (
+                    <div key={cand.session.id} className="double-feature-card">
+                      <div className="double-feature-card__top">
+                        <span className="double-feature-card__handoff">
+                          +{cand.breakMinutes} min ·{' '}
+                          {cand.isSameCinema
+                            ? t.sameVenue
+                            : `${formatDistanceKm(cand.transferDistanceKm)}`}
+                        </span>
+                        <span className="double-feature-card__price">
+                          {formatSessionPrice(cand.combinedPrice, candCurrency)} ·{' '}
+                          {formatRuntime(cand.combinedRuntimeMinutes)}
+                        </span>
+                      </div>
+                      <strong className="double-feature-card__title">{candTitle}</strong>
+                      <div className="double-feature-card__meta">
+                        <span>
+                          {candWindow.startFormatted} → {candWindow.finishFormatted}
+                        </span>
+                        <span>· {cand.session.format}</span>
+                        <span>· {candCinemaName}</span>
+                      </div>
+                      <div className="double-feature-card__actions">
+                        {onPinPairToShortlist && (
+                          <button
+                            type="button"
+                            className={`maps-action-btn ${bothPinned ? 'fav-maison-btn--active' : ''}`}
+                            onClick={() => onPinPairToShortlist([session.id, cand.session.id])}
+                          >
+                            {bothPinned ? <Check size={12} /> : <Bookmark size={12} />}
+                            <span>{bothPinned ? t.pinnedBoth : t.pinBothToFolio}</span>
+                          </button>
+                        )}
+                        {onSelectSession && (
+                          <button
+                            type="button"
+                            className="maps-action-btn"
+                            onClick={() => onSelectSession(cand.session)}
+                          >
+                            <span>{t.viewSession}</span>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </section>
+        )}
+
         <div className="modal-sheet__footer">
           <button
             type="button"
@@ -316,7 +444,7 @@ export function SessionDetailModal({
             onClick={() => onToggleShortlist(session.id)}
           >
             {isShortlisted ? <Check size={16} /> : <Bookmark size={16} />}
-            <span>{isShortlisted ? 'Pinned in Shortlist' : 'Pin to Compare'}</span>
+            <span>{isShortlisted ? t.pinnedInShortlist : t.pinToCompare}</span>
           </button>
 
           {safeBookingUrl && (
@@ -327,7 +455,7 @@ export function SessionDetailModal({
               id="modal-official-booking-link"
               className="btn-primary"
             >
-              <span>Book at {cinema.name}</span>
+              <span>{t.bookAt(displayCinemaName)}</span>
               <ExternalLink size={15} aria-hidden="true" />
             </a>
           )}

@@ -33,6 +33,17 @@ jobs:
           SERPAPI_API_KEY: ${{ secrets.SERPAPI_API_KEY }}
         run: npm run sync
 
+      - name: Dispatch Watchlist & 35mm/70mm drop radar alerts (optional secrets)
+        env:
+          BARK_KEY: ${{ secrets.BARK_KEY }}
+          BARK_URL: ${{ secrets.BARK_URL }}
+          SERVERCHAN_SENDKEY: ${{ secrets.SERVERCHAN_SENDKEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          REELHOUSE_ALERT_WEBHOOK_URL: ${{ secrets.REELHOUSE_ALERT_WEBHOOK_URL }}
+          REELHOUSE_WATCH_TITLES: ${{ secrets.REELHOUSE_WATCH_TITLES }}
+        run: npm run notify
+
       - name: Commit and push updated session catalog (triggers Render auto-deploy)
         run: |
           if git diff --quiet -- server/cache/live_catalog.json public/live_catalog.json; then

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { BookmarkCheck, Check, Link2 } from 'lucide-react';
 import { cinemaDataService } from './services/cinemaProvider';
 import type {
+  AppLanguage,
   BrowseMode,
   Cinema,
   CityId,
@@ -22,17 +23,21 @@ import {
   loadValidatedCity,
   loadValidatedEdition,
   loadValidatedFavoriteCinemas,
+  loadValidatedLanguage,
   loadValidatedShortlist,
   loadValidatedWatchlist,
-  parseValidatedFolioIds,
+  parseValidatedFolioEntries,
   parseValidatedUrlFilters,
   saveCityPreference,
   saveEditionPreference,
   saveFavoriteCinemas,
+  saveLanguagePreference,
   saveShortlist,
   saveWatchlist,
 } from './utils/security';
 import { getLocalCurrentMinutesFromMidnight } from './utils/formatters';
+import { getDisplayMovieTitle, getUiText } from './utils/i18n';
+import { evaluateSessionReachability } from './utils/planner';
 import {
   getCinemaDistanceInfo,
   resolveHubOrigin,
@@ -131,7 +136,8 @@ export function App() {
       minRating: 'all',
       finishBy: urlPatch.finishBy ?? 'all',
       nearHubId: urlPatch.nearHubId ?? 'cbd',
-      dealsOnly: false,
+      dealsOnly: urlPatch.dealsOnly ?? false,
+      makeItOnly: urlPatch.makeItOnly ?? false,
       showPastToday: false,
       searchQuery: urlPatch.searchQuery ?? '',
     };
@@ -143,11 +149,11 @@ export function App() {
   const [isLocationModalOpen, setIsLocationModalOpen] = useState(false);
 
   const [shortlist, setShortlist] = useState<ShortlistEntry[]>(() => {
-    const sharedIds = parseValidatedFolioIds(window.location.search);
-    if (sharedIds.length > 0) {
-      const seeded = sharedIds.map((sessionId, idx) => ({
-        sessionId,
-        votes: 1,
+    const sharedEntries = parseValidatedFolioEntries(window.location.search);
+    if (sharedEntries.length > 0) {
+      const seeded = sharedEntries.map((entry, idx) => ({
+        sessionId: entry.sessionId,
+        votes: entry.votes,
         addedAtMs: Date.now() + idx,
       }));
       saveShortlist(seeded);
@@ -160,11 +166,12 @@ export function App() {
     loadValidatedFavoriteCinemas()
   );
   const [edition, setEdition] = useState<SalonEdition>(() => loadValidatedEdition());
+  const [lang, setLang] = useState<AppLanguage>(() => loadValidatedLanguage(window.location.search));
   const [selectedSession, setSelectedSession] = useState<ScreeningSession | null>(null);
   const [inspectedRatingsMovie, setInspectedRatingsMovie] = useState<Movie | null>(null);
   const [trailerMovie, setTrailerMovie] = useState<Movie | null>(null);
   const [isShortlistOpen, setIsShortlistOpen] = useState<boolean>(
-    () => parseValidatedFolioIds(window.location.search).length > 0
+    () => parseValidatedFolioEntries(window.location.search).length > 0
   );
   const [dockLinkCopied, setDockLinkCopied] = useState(false);
   const [isApiSettingsOpen, setIsApiSettingsOpen] = useState(false);
@@ -185,6 +192,10 @@ export function App() {
   useEffect(() => {
     document.documentElement.dataset.edition = edition;
   }, [edition]);
+
+  useEffect(() => {
+    document.documentElement.lang = lang === 'zh' ? 'zh-CN' : 'en';
+  }, [lang]);
 
   useEffect(() => {
     let cancelled = false;
@@ -215,6 +226,14 @@ export function App() {
     });
   };
 
+  const handleToggleLanguage = () => {
+    setLang((prev) => {
+      const next: AppLanguage = prev === 'en' ? 'zh' : 'en';
+      saveLanguagePreference(next);
+      return next;
+    });
+  };
+
   const cityMeta = cinemaDataService.getCityMeta(filters.city);
   const calendarDays = useMemo(
     () => cinemaDataService.getCalendarDays(filters.city),
@@ -231,20 +250,23 @@ export function App() {
   // Keep browser URL query string in sync with active filters for 1-click sharing (zero page reload).
   useEffect(() => {
     const defaultToday = calendarDays[0]?.dateIso ?? filters.dateIso;
-    const activeFolioIds =
-      isShortlistOpen && shortlist.length > 0 ? shortlist.map((s) => s.sessionId) : undefined;
+    const activeFolioItems =
+      isShortlistOpen && shortlist.length > 0
+        ? shortlist.map((s) => ({ sessionId: s.sessionId, votes: s.votes }))
+        : undefined;
     const qs = buildShareableFilterQueryString(
       filters,
       defaultToday,
       isAdminMode,
-      activeFolioIds
+      activeFolioItems,
+      lang
     );
     const nextRelativeUrl = `${window.location.pathname}${qs}${window.location.hash}`;
     const currentRelativeUrl = `${window.location.pathname}${window.location.search}${window.location.hash}`;
     if (nextRelativeUrl !== currentRelativeUrl) {
       window.history.replaceState(null, '', nextRelativeUrl);
     }
-  }, [filters, calendarDays, isAdminMode, isShortlistOpen, shortlist]);
+  }, [filters, calendarDays, isAdminMode, isShortlistOpen, shortlist, lang]);
   const cityCinemas = useMemo(
     () => {
       void catalogRevision;
@@ -620,6 +642,7 @@ export function App() {
       finishBy: 'all',
       nearHubId: 'cbd',
       dealsOnly: false,
+      makeItOnly: false,
       showPastToday: false,
       searchQuery: '',
     }));
@@ -676,8 +699,18 @@ export function App() {
       if (filters.suburb !== 'all' && cinema.suburb !== filters.suburb) return false;
       if (filters.vibe !== 'all' && cinema.vibe !== filters.vibe) return false;
       if (filters.genre !== 'all' && !movie.genres.includes(filters.genre)) return false;
-      if (filters.formats.length > 0 && !filters.formats.includes(session.format)) {
-        return false;
+      if (filters.formats.length > 0) {
+        const matchesFormat = filters.formats.some((fmt) => {
+          if (session.format === fmt) return true;
+          if (
+            fmt === '35mm / 70mm' &&
+            session.accessibilityTags.some((tag) => /35mm|70mm/i.test(tag))
+          ) {
+            return true;
+          }
+          return false;
+        });
+        if (!matchesFormat) return false;
       }
       if (!matchesTimeOfDay(session.startMinutesFromMidnight, filters.timeOfDay)) {
         return false;
@@ -704,6 +737,16 @@ export function App() {
         return false;
       }
       if (filters.dealsOnly && !session.isDealSession) return false;
+      if (isTodaySelected && filters.makeItOnly) {
+        const distKm = getCinemaDistanceInfo(cinema, userOrigin).km;
+        const reach = evaluateSessionReachability(
+          distKm,
+          filters.city,
+          session.startMinutesFromMidnight,
+          localNowMinutes
+        );
+        if (!reach.canMakeIt) return false;
+      }
 
       if (query.length > 0) {
         const searchable = [
@@ -712,6 +755,7 @@ export function App() {
           movie.director,
           ...movie.castLead,
           ...movie.genres,
+          ...session.accessibilityTags,
           cinema.name,
           cinema.chain,
           cinema.suburb,
@@ -735,8 +779,13 @@ export function App() {
       s.startMinutesFromMidnight + 15 < localNowMinutes;
     const pastCount = baseMatched.filter(isPastGraceWindow).length;
 
-    if (filters.showPastToday) {
-      return { filteredSessions: baseMatched, hiddenPastTodayCount: pastCount };
+    if (filters.showPastToday || filters.makeItOnly) {
+      return {
+        filteredSessions: filters.makeItOnly
+          ? baseMatched
+          : baseMatched,
+        hiddenPastTodayCount: filters.makeItOnly ? 0 : pastCount,
+      };
     }
 
     return {
@@ -748,6 +797,7 @@ export function App() {
     allCinemasMap,
     movieMap,
     favoriteCinemaIds,
+    userOrigin,
     catalogRevision,
     isTodaySelected,
     localNowMinutes,
@@ -915,6 +965,7 @@ export function App() {
     if (filters.nearHubId !== 'cbd') count++;
     if (filters.minRating !== 'all') count++;
     if (filters.releaseStatus === 'in_cinemas' && filters.dealsOnly) count++;
+    if (filters.releaseStatus === 'in_cinemas' && filters.makeItOnly) count++;
     if (filters.searchQuery.trim().length > 0) count++;
     return count;
   }, [filters]);
@@ -933,6 +984,23 @@ export function App() {
         : [...prev.slice(-5), { sessionId, votes: 1, addedAtMs: Date.now() }];
       saveShortlist(next);
       return next;
+    });
+  };
+
+  const handlePinPairToShortlist = (sessionIds: string[]) => {
+    setShortlist((prev) => {
+      const next = [...prev];
+      const existing = new Set(next.map((e) => e.sessionId));
+      const now = Date.now();
+      sessionIds.forEach((sid, idx) => {
+        if (!existing.has(sid)) {
+          existing.add(sid);
+          next.push({ sessionId: sid, votes: 1, addedAtMs: now + idx });
+        }
+      });
+      const sliced = next.slice(-6);
+      saveShortlist(sliced);
+      return sliced;
     });
   };
 
@@ -971,11 +1039,22 @@ export function App() {
   const selectedModalCinema = selectedSession
     ? allCinemasMap.get(selectedSession.cinemaId) ?? null
     : null;
+  const modalSameDaySessions = useMemo(() => {
+    void catalogRevision;
+    if (!selectedSession) return [];
+    return cinemaDataService.getSessionsForCityAndDate(
+      selectedSession.city,
+      selectedSession.dateIso
+    );
+  }, [selectedSession, catalogRevision]);
+
+  const t = getUiText(lang);
 
   return (
     <div className="app-shell">
       <HeaderBar
         city={filters.city}
+        lang={lang}
         userOrigin={userOrigin}
         releaseStatus={filters.releaseStatus}
         browseMode={filters.browseMode}
@@ -986,6 +1065,7 @@ export function App() {
         matchingSessionCount={filteredSessions.length}
         comingSoonCount={comingSoonItems.length}
         onChangeCity={handleChangeCity}
+        onToggleLanguage={handleToggleLanguage}
         onChangeReleaseStatus={handleChangeReleaseStatus}
         onChangeBrowseMode={handleChangeBrowseMode}
         onOpenLocationModal={handleOpenLocationModal}
@@ -998,6 +1078,7 @@ export function App() {
       <main className="main-container">
         <HeroEditorialBanner
           cityMeta={cityMeta}
+          lang={lang}
           userOrigin={userOrigin}
           featuredMovies={featuredMovies}
           activeSearchQuery={filters.searchQuery}
@@ -1007,6 +1088,7 @@ export function App() {
 
         <SmartFilterDeck
           cityMeta={cityMeta}
+          lang={lang}
           calendarDays={calendarDays}
           movieOptions={movieOptions}
           cinemaOptions={cinemaOptions}
@@ -1059,6 +1141,7 @@ export function App() {
           <MovieBrowseView
             items={movieBrowseItems}
             isShanghai={filters.city === 'shanghai'}
+            lang={lang}
             userOrigin={userOrigin}
             shortlistedIds={shortlistedIds}
             favoriteCinemaIds={favoriteCinemaIds}
@@ -1077,6 +1160,7 @@ export function App() {
         ) : filters.browseMode === 'map' ? (
           <CinemaMapView
             cityMeta={cityMeta}
+            lang={lang}
             edition={edition}
             allCityCinemas={cityCinemas}
             cinemaItems={cinemaBrowseItems}
@@ -1097,6 +1181,7 @@ export function App() {
           <CinemaBrowseView
             items={cinemaBrowseItems}
             isShanghai={filters.city === 'shanghai'}
+            lang={lang}
             userOrigin={userOrigin}
             shortlistedIds={shortlistedIds}
             favoriteCinemaIds={favoriteCinemaIds}
@@ -1121,14 +1206,18 @@ export function App() {
               <BookmarkCheck size={18} className="dock-icon" aria-hidden="true" />
               <div>
                 <strong>
-                  {hydratedShortlist.length}{' '}
-                  {hydratedShortlist.length === 1
-                    ? 'session pinned'
-                    : 'sessions ready to compare'}
+                  {lang === 'zh'
+                    ? `已加入 ${hydratedShortlist.length} 场对比`
+                    : `${hydratedShortlist.length} ${
+                        hydratedShortlist.length === 1 ? 'session pinned' : 'sessions ready to compare'
+                      }`}
                 </strong>
                 <span className="floating-shortlist-dock__names">
                   {hydratedShortlist
-                    .map((h) => `${h.movie.title} (${h.cinema.suburb})`)
+                    .map(
+                      (h) =>
+                        `${getDisplayMovieTitle(h.movie, lang, filters.city === 'shanghai')} (${h.cinema.suburb})`
+                    )
                     .slice(0, 3)
                     .join(' · ')}
                 </span>
@@ -1143,7 +1232,12 @@ export function App() {
                 onClick={async () => {
                   const url = buildShareableFolioUrl(
                     filters.city,
-                    hydratedShortlist.map((h) => h.session.id)
+                    hydratedShortlist.map((h) => ({
+                      sessionId: h.session.id,
+                      votes: h.entry.votes,
+                    })),
+                    lang,
+                    false
                   );
                   const ok = await copyTextSafely(url);
                   if (ok) {
@@ -1153,7 +1247,7 @@ export function App() {
                 }}
               >
                 {dockLinkCopied ? <Check size={14} /> : <Link2 size={14} />}
-                <span>{dockLinkCopied ? 'Folio Link Copied ✓' : 'Share Folio Link'}</span>
+                <span>{dockLinkCopied ? t.folioLinkCopied : t.shareFolioLink}</span>
               </button>
               <button
                 type="button"
@@ -1161,7 +1255,7 @@ export function App() {
                 className="btn-primary btn-primary--sm"
                 onClick={() => setIsShortlistOpen(true)}
               >
-                Compare Side-by-Side
+                {lang === 'zh' ? '并排比价对比' : 'Compare Side-by-Side'}
               </button>
             </div>
           </div>
@@ -1193,6 +1287,7 @@ export function App() {
             ? cinemaDataService.getCityMeta(selectedSession.city)
             : cityMeta
         }
+        lang={lang}
         userOrigin={userOrigin}
         isShortlisted={
           selectedSession ? shortlistedIds.has(selectedSession.id) : false
@@ -1200,11 +1295,17 @@ export function App() {
         isFavoriteCinema={
           selectedModalCinema ? favoriteCinemaIds.has(selectedModalCinema.id) : false
         }
+        sameDaySessions={modalSameDaySessions}
+        movieMap={movieMap}
+        cinemaMap={allCinemasMap}
+        shortlistedIds={shortlistedIds}
         hasTopOverlay={
           inspectedRatingsMovie !== null || trailerMovie !== null || isLocationModalOpen
         }
         onClose={() => setSelectedSession(null)}
         onToggleShortlist={handleToggleShortlist}
+        onPinPairToShortlist={handlePinPairToShortlist}
+        onSelectSession={setSelectedSession}
         onToggleFavoriteCinema={handleToggleFavoriteCinema}
         onInspectRatings={setInspectedRatingsMovie}
         onWatchTrailer={setTrailerMovie}
@@ -1214,6 +1315,7 @@ export function App() {
         isOpen={isShortlistOpen}
         items={hydratedShortlist}
         activeCity={filters.city}
+        lang={lang}
         userOrigin={userOrigin}
         hasTopOverlay={
           inspectedRatingsMovie !== null || trailerMovie !== null || isLocationModalOpen

@@ -1,7 +1,14 @@
 import { useState } from 'react';
 import { Clock, ExternalLink, Heart, MapPin, Navigation, Play, Train } from 'lucide-react';
-import type { Cinema, Movie, ScreeningSession } from '../types/cinema';
+import type { AppLanguage, Cinema, Movie, ScreeningSession } from '../types/cinema';
 import { formatDistanceKm, formatRuntime } from '../utils/formatters';
+import {
+  getDisplayCinemaName,
+  getDisplayMovieSynopsis,
+  getDisplayMovieTagline,
+  getDisplayMovieTitle,
+  getUiText,
+} from '../utils/i18n';
 import { getCinemaDistanceInfo, type UserLocationOrigin } from '../utils/proximity';
 import {
   buildSafeGoogleMapsDirectionsUrl,
@@ -23,6 +30,7 @@ export interface MovieWithVenueSessions {
 interface MovieBrowseViewProps {
   items: MovieWithVenueSessions[];
   isShanghai?: boolean;
+  lang?: AppLanguage;
   userOrigin: UserLocationOrigin;
   shortlistedIds: Set<string>;
   favoriteCinemaIds: Set<string>;
@@ -50,6 +58,7 @@ type MovieSortOption =
 export function MovieBrowseView({
   items,
   isShanghai = false,
+  lang = 'en',
   userOrigin,
   shortlistedIds,
   favoriteCinemaIds,
@@ -66,6 +75,7 @@ export function MovieBrowseView({
   onResetFilters,
 }: MovieBrowseViewProps) {
   const [sortBy, setSortBy] = useState<MovieSortOption>('recommended');
+  const t = getUiText(lang);
 
   if (items.length === 0) {
     return (
@@ -150,24 +160,24 @@ export function MovieBrowseView({
         <div className="results-toolbar__title-group">
           <span className="results-toolbar__kicker">CATALOGUE RAISONNÉ</span>
           <h2 className="results-toolbar__heading">
-            {sortedItems.length} {sortedItems.length === 1 ? 'Work' : 'Works'} in Projection
+            {t.worksInProjection(sortedItems.length)}
           </h2>
         </div>
 
         <label className="inline-select">
-          <span className="inline-select__label">Order</span>
+          <span className="inline-select__label">{lang === 'zh' ? '排序' : 'Order'}</span>
           <select
             id="movie-sort-select"
             value={sortBy}
             onChange={(e) => setSortBy(e.target.value as MovieSortOption)}
             className="inline-select__control"
           >
-            <option value="recommended">Curator’s Sequence</option>
-            <option value="imdb">Highest IMDb Score</option>
-            <option value="rt">Highest Rotten Tomatoes</option>
-            <option value="douban">Highest Douban (豆瓣)</option>
-            <option value="sessions">Most Daily Sessions</option>
-            <option value="shortest">Shortest Duration</option>
+            <option value="recommended">{lang === 'zh' ? '策划推荐排序' : 'Curator’s Sequence'}</option>
+            <option value="imdb">{lang === 'zh' ? 'IMDb 评分最高' : 'Highest IMDb Score'}</option>
+            <option value="rt">{lang === 'zh' ? '烂番茄评分最高' : 'Highest Rotten Tomatoes'}</option>
+            <option value="douban">{lang === 'zh' ? '豆瓣评分最高' : 'Highest Douban (豆瓣)'}</option>
+            <option value="sessions">{lang === 'zh' ? '今日排片场次最多' : 'Most Daily Sessions'}</option>
+            <option value="shortest">{lang === 'zh' ? '片长最短' : 'Shortest Duration'}</option>
           </select>
         </label>
       </div>
@@ -175,6 +185,9 @@ export function MovieBrowseView({
       <div className="movie-list">
         {sortedItems.map(({ movie, venues }, index) => {
           const catalogNumber = String(index + 1).padStart(2, '0');
+          const displayTitle = getDisplayMovieTitle(movie, lang, isShanghai);
+          const displayTagline = getDisplayMovieTagline(movie, lang);
+          const displaySynopsis = getDisplayMovieSynopsis(movie, lang);
 
           return (
             <article key={movie.id} className="movie-card" id={`movie-card-${movie.id}`}>
@@ -202,14 +215,8 @@ export function MovieBrowseView({
                     </span>
                   </div>
 
-                  <h3 className="movie-card__title">
-                    {isShanghai &&
-                    movie.ratings.douban.chineseTitle &&
-                    movie.ratings.douban.chineseTitle !== movie.title
-                      ? `${movie.title} · ${movie.ratings.douban.chineseTitle}`
-                      : movie.title}
-                  </h3>
-                  <p className="movie-card__epigraph">“{movie.tagline}”</p>
+                  <h3 className="movie-card__title">{displayTitle}</h3>
+                  <p className="movie-card__epigraph">“{displayTagline}”</p>
 
                   <p className="movie-card__byline">
                     {movie.genres.join(' · ')} — {movie.languageNote} ({movie.countryOrigin},{' '}
@@ -224,15 +231,15 @@ export function MovieBrowseView({
                         id={`movie-trailer-btn-${movie.id}`}
                         className="trailer-pill-btn"
                         onClick={() => onWatchTrailer(movie)}
-                        aria-label={`Watch official trailer for ${movie.title}`}
+                        aria-label={`Watch official trailer for ${displayTitle}`}
                       >
                         <Play size={11} aria-hidden="true" fill="currentColor" />
-                        <span>Watch Trailer</span>
+                        <span>{t.watchTrailer}</span>
                       </button>
                     )}
                   </div>
 
-                  <p className="movie-card__synopsis">{movie.synopsis}</p>
+                  <p className="movie-card__synopsis">{displaySynopsis}</p>
 
                   <p className="movie-card__cast">
                     <span>FEATURING</span> {movie.castLead.join(' · ')}
@@ -246,11 +253,11 @@ export function MovieBrowseView({
 
               <div className="movie-card__venues-col">
                 <div className="venues-header">
-                  <span>
-                    {venues.length} {venues.length === 1 ? 'MAISON' : 'MAISONS'} SCREENING
-                  </span>
+                  <span>{t.maisonsScreening(venues.length)}</span>
                   <span className="venues-header__hint">
-                    Select hour for dossier · Bookmark for folio
+                    {lang === 'zh'
+                      ? '点击场次查看详情 · 书签加入好友对比'
+                      : 'Select hour for dossier · Bookmark for folio'}
                   </span>
                 </div>
 
@@ -258,6 +265,7 @@ export function MovieBrowseView({
                   {venues.map(({ cinema, sessions }) => {
                     const isFav = favoriteCinemaIds.has(cinema.id);
                     const dist = getCinemaDistanceInfo(cinema, userOrigin);
+                    const displayCinemaName = getDisplayCinemaName(cinema, lang);
                     return (
                       <div key={cinema.id} className="venue-schedule-row">
                         <div className="venue-schedule-row__info">
@@ -269,8 +277,8 @@ export function MovieBrowseView({
                               aria-pressed={isFav}
                               aria-label={
                                 isFav
-                                  ? `Remove ${cinema.name} from favorites`
-                                  : `Add ${cinema.name} to favorites`
+                                  ? `Remove ${displayCinemaName} from favorites`
+                                  : `Add ${displayCinemaName} to favorites`
                               }
                               title={isFav ? 'Favorited cinema' : 'Add cinema to favorites'}
                               onClick={() => onToggleFavoriteCinema(cinema.id)}
@@ -281,7 +289,7 @@ export function MovieBrowseView({
                                 fill={isFav ? 'currentColor' : 'none'}
                               />
                             </button>
-                            <h4 className="venue-schedule-row__name">{cinema.name}</h4>
+                            <h4 className="venue-schedule-row__name">{displayCinemaName}</h4>
                             <span className="chain-tag chain-tag--compact">{cinema.chain}</span>
                             <span className="vibe-tag">{cinema.vibe}</span>
                           </div>
@@ -313,11 +321,11 @@ export function MovieBrowseView({
                               rel="noopener noreferrer"
                               id={`movie-venue-maps-${movie.id}-${cinema.id}`}
                               className="maps-inline-btn"
-                              aria-label={`Open ${cinema.name} on Google Maps`}
+                              aria-label={`Open ${displayCinemaName} on Google Maps`}
                             >
                               <Navigation size={11} aria-hidden="true" />
                               <span>
-                                {userOrigin.isCustomOrigin ? 'Directions' : 'Google Maps'}
+                                {userOrigin.isCustomOrigin ? t.directions : t.googleMaps}
                               </span>
                               <ExternalLink size={10} aria-hidden="true" />
                             </a>
@@ -329,6 +337,7 @@ export function MovieBrowseView({
                             <SessionPill
                               key={session.id}
                               session={session}
+                              lang={lang}
                               isShortlisted={shortlistedIds.has(session.id)}
                               onSelectSession={onSelectSession}
                               onToggleShortlist={onToggleShortlist}

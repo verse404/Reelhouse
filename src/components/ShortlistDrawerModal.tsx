@@ -4,7 +4,9 @@ import {
   CalendarPlus,
   Check,
   Copy,
+  Download,
   ExternalLink,
+  Image as ImageIcon,
   Link2,
   Navigation,
   Play,
@@ -14,6 +16,7 @@ import {
   X,
 } from 'lucide-react';
 import type {
+  AppLanguage,
   Cinema,
   CityId,
   Movie,
@@ -29,12 +32,15 @@ import {
   formatSessionWindow,
   formatTenPointScore,
 } from '../utils/formatters';
+import { getDisplayCinemaName, getDisplayMovieTitle, getUiText } from '../utils/i18n';
+import { exportShortlistCardPng } from '../utils/planner';
 import { getCinemaDistanceInfo, type UserLocationOrigin } from '../utils/proximity';
 import {
   buildSafeGoogleCalendarUrl,
   buildSafeGoogleMapsUrl,
   buildShareableFolioUrl,
   copyTextSafely,
+  downloadIcsFile,
   getSafeOutboundCinemaUrl,
 } from '../utils/security';
 import { MoviePoster } from './MoviePoster';
@@ -51,6 +57,7 @@ interface ShortlistDrawerModalProps {
   isOpen: boolean;
   items: HydratedShortlistItem[];
   activeCity: CityId;
+  lang?: AppLanguage;
   userOrigin: UserLocationOrigin;
   hasTopOverlay?: boolean;
   onClose: () => void;
@@ -74,6 +81,7 @@ export function ShortlistDrawerModal({
   isOpen,
   items,
   activeCity,
+  lang = 'en',
   userOrigin,
   hasTopOverlay = false,
   onClose,
@@ -85,6 +93,10 @@ export function ShortlistDrawerModal({
 }: ShortlistDrawerModalProps) {
   const [copiedFeedback, setCopiedFeedback] = useState(false);
   const [copiedLinkFeedback, setCopiedLinkFeedback] = useState(false);
+  const [copiedVoteReply, setCopiedVoteReply] = useState(false);
+  const [savedCardPng, setSavedCardPng] = useState(false);
+
+  const t = getUiText(lang);
 
   useEffect(() => {
     if (!isOpen || hasTopOverlay) return;
@@ -107,19 +119,23 @@ export function ShortlistDrawerModal({
     items.length > 0 ? Math.max(...items.map((i) => i.movie.criticScorePercent)) : 0;
   const maxVotes = items.length > 0 ? Math.max(...items.map((i) => i.entry.votes)) : 0;
 
+  const folioShareItems = items.map((i) => ({
+    sessionId: i.session.id,
+    votes: i.entry.votes,
+  }));
+
   const handleCopyGroupPlan = async () => {
     if (items.length === 0) return;
-    const shareUrl = buildShareableFolioUrl(
-      activeCity,
-      items.map((i) => i.session.id)
-    );
+    const shareUrl = buildShareableFolioUrl(activeCity, folioShareItems, lang, false);
     const lines = [
-      '🎬 Movie Night Options — Vote & Compare:',
+      lang === 'zh'
+        ? '🎬 今晚观影候选清单 — 点击链接直接比价与投票：'
+        : '🎬 Movie Night Options — Vote & Compare:',
       shareUrl,
       '',
       ...items.map((item, idx) => {
         const cityMeta = CITIES[item.session.city];
-        const dayParts = formatCalendarChipParts(item.session.dateIso, cityMeta.timeZone);
+        const dayParts = formatCalendarChipParts(item.session.dateIso, cityMeta.timeZone, lang);
         const win = formatSessionWindow(
           item.session.startMinutesFromMidnight,
           item.movie.runtimeMinutes
@@ -137,13 +153,13 @@ export function ShortlistDrawerModal({
             ? formatTenPointScore(item.movie.ratings.douban.score)
             : 'NR';
         const sessCurrency = item.session.currency ?? cityMeta.currency;
-        return `${idx + 1}. ${item.movie.title} (${item.movie.classification} | IMDb ${imdbStr} · RT ${rtStr} · 豆瓣 ${dbStr}) — ${
-          item.cinema.name
-        }, ${item.cinema.suburb} | ${dayParts.weekdayShort} ${dayParts.dayMonthShort}, ${
+        const displayTitle = getDisplayMovieTitle(item.movie, lang, item.session.city === 'shanghai');
+        const displayCinema = getDisplayCinemaName(item.cinema, lang);
+        return `${idx + 1}. ${displayTitle} (${item.movie.classification} | IMDb ${imdbStr} · RT ${rtStr} · 豆瓣 ${dbStr}) — ${displayCinema}, ${item.cinema.suburb} | ${dayParts.weekdayShort} ${dayParts.dayMonthShort}, ${
           win.startFormatted
-        } (${item.session.format}, ${formatSessionPrice(item.session.priceAud, sessCurrency)}) [Votes: ${
-          item.entry.votes
-        }]`;
+        } (${item.session.format}, ${formatSessionPrice(item.session.priceAud, sessCurrency)}) [${
+          lang === 'zh' ? '票数' : 'Votes'
+        }: ${item.entry.votes}]`;
       }),
     ];
 
@@ -158,14 +174,62 @@ export function ShortlistDrawerModal({
 
   const handleShareFolioLink = async () => {
     if (items.length === 0) return;
-    const shareUrl = buildShareableFolioUrl(
-      activeCity,
-      items.map((i) => i.session.id)
-    );
+    const shareUrl = buildShareableFolioUrl(activeCity, folioShareItems, lang, false);
     const ok = await copyTextSafely(shareUrl);
     if (ok) {
       setCopiedLinkFeedback(true);
       window.setTimeout(() => setCopiedLinkFeedback(false), 2800);
+    }
+  };
+
+  const handleCopyVoteReply = async () => {
+    if (items.length === 0) return;
+    const replyUrl = buildShareableFolioUrl(activeCity, folioShareItems, lang, true);
+    const sorted = [...items].sort((a, b) => b.entry.votes - a.entry.votes);
+    const lines = [
+      lang === 'zh'
+        ? '🗳️ 我的选片投票更新（点击打开我的票数顺序）：'
+        : '🗳️ My Updated Screening Votes (open link to load):',
+      replyUrl,
+      '',
+      ...sorted.map((item, idx) => {
+        const cityMeta = CITIES[item.session.city];
+        const dayParts = formatCalendarChipParts(item.session.dateIso, cityMeta.timeZone, lang);
+        const win = formatSessionWindow(
+          item.session.startMinutesFromMidnight,
+          item.movie.runtimeMinutes
+        );
+        const title = getDisplayMovieTitle(item.movie, lang, item.session.city === 'shanghai');
+        const cinemaName = getDisplayCinemaName(item.cinema, lang);
+        return `${idx + 1}. [${item.entry.votes} ${lang === 'zh' ? '票' : 'votes'}] ${title} — ${cinemaName} (${dayParts.weekdayShort} ${dayParts.dayMonthShort}, ${win.startFormatted})`;
+      }),
+    ];
+    const ok = await copyTextSafely(lines.join('\n'));
+    if (ok) {
+      setCopiedVoteReply(true);
+      window.setTimeout(() => setCopiedVoteReply(false), 2800);
+    }
+  };
+
+  const handleSaveShareCard = async () => {
+    if (items.length === 0) return;
+    const cityMeta = CITIES[activeCity];
+    const ok = await exportShortlistCardPng({
+      items: items.map((i) => ({
+        movie: i.movie,
+        cinema: i.cinema,
+        session: i.session,
+        votes: i.entry.votes,
+      })),
+      cityName: t.cityNames[activeCity] ?? cityMeta.name,
+      timeZone: cityMeta.timeZone,
+      currency: cityMeta.currency,
+      lang,
+      userOrigin,
+    });
+    if (ok) {
+      setSavedCardPng(true);
+      window.setTimeout(() => setSavedCardPng(false), 2800);
     }
   };
 
@@ -187,7 +251,7 @@ export function ShortlistDrawerModal({
           <div>
             <span className="ticket-kicker">Decision Helper · Solo or Group Picker</span>
             <h2 id="shortlist-modal-title" className="shortlist-title">
-              Shortlist &amp; Side-by-Side Comparison ({items.length})
+              {t.shortlistTitle(items.length)}
             </h2>
           </div>
 
@@ -202,8 +266,28 @@ export function ShortlistDrawerModal({
                 >
                   {copiedLinkFeedback ? <Check size={14} /> : <Link2 size={14} />}
                   <span>
-                    {copiedLinkFeedback ? 'Folio Link Copied ✓' : 'Share Folio Link'}
+                    {copiedLinkFeedback ? t.folioLinkCopied : t.shareFolioLink}
                   </span>
+                </button>
+                <button
+                  type="button"
+                  id="copy-vote-reply-btn"
+                  className="btn-secondary"
+                  onClick={handleCopyVoteReply}
+                  title="Encode your updated votes back into the ?folio= link to reply in chat"
+                >
+                  {copiedVoteReply ? <Check size={14} /> : <ThumbsUp size={14} />}
+                  <span>{copiedVoteReply ? t.voteReplyCopied : t.copyVoteReply}</span>
+                </button>
+                <button
+                  type="button"
+                  id="export-share-card-btn"
+                  className="btn-secondary"
+                  onClick={handleSaveShareCard}
+                  title="Render & download a 1080px Noir Comparison Card PNG for WeChat / Instagram / iMessage"
+                >
+                  {savedCardPng ? <Check size={14} /> : <ImageIcon size={14} />}
+                  <span>{savedCardPng ? t.shareCardSaved : t.saveShareCard}</span>
                 </button>
                 <button
                   type="button"
@@ -212,7 +296,7 @@ export function ShortlistDrawerModal({
                   onClick={handleCopyGroupPlan}
                 >
                   {copiedFeedback ? <Check size={15} /> : <Copy size={15} />}
-                  <span>{copiedFeedback ? 'Copied Text + Link!' : 'Copy Text Summary'}</span>
+                  <span>{copiedFeedback ? t.copiedTextLink : t.copyTextSummary}</span>
                 </button>
                 <button
                   type="button"
@@ -221,7 +305,7 @@ export function ShortlistDrawerModal({
                   onClick={onClearAll}
                 >
                   <Trash2 size={14} />
-                  <span>Clear All</span>
+                  <span>{t.clearAll}</span>
                 </button>
               </>
             )}
@@ -250,13 +334,13 @@ export function ShortlistDrawerModal({
           <div className="comparison-grid">
             {items.map(({ entry, session, movie, cinema }) => {
               const cityMeta = CITIES[session.city];
-              const dateParts = formatCalendarChipParts(session.dateIso, cityMeta.timeZone);
+              const dateParts = formatCalendarChipParts(session.dateIso, cityMeta.timeZone, lang);
               const win = formatSessionWindow(
                 session.startMinutesFromMidnight,
                 movie.runtimeMinutes
               );
               const safeUrl = getSafeOutboundCinemaUrl(cinema.bookingDomainUrl);
-              const googleCalendarUrl = buildSafeGoogleCalendarUrl({
+              const calInput = {
                 movieTitle: movie.title,
                 director: movie.director,
                 format: session.format,
@@ -268,23 +352,26 @@ export function ShortlistDrawerModal({
                 runtimeMinutes: movie.runtimeMinutes,
                 timeZone: cityMeta.timeZone,
                 bookingUrl: safeUrl,
-              });
+              };
+              const googleCalendarUrl = buildSafeGoogleCalendarUrl(calInput);
+              const displayTitle = getDisplayMovieTitle(movie, lang, session.city === 'shanghai');
+              const displayCinema = getDisplayCinemaName(cinema, lang);
 
               const dist = getCinemaDistanceInfo(cinema, userOrigin);
 
               const badges: string[] = [];
               if (items.length > 1 && session.priceAud === minPrice) {
-                badges.push('Best Value');
+                badges.push(t.bestValue);
               }
               if (
                 items.length > 1 &&
                 FORMAT_GRANDEUR_SCORE[session.format] === maxFormatRank &&
                 maxFormatRank > 1
               ) {
-                badges.push('Signature Format');
+                badges.push(t.signatureFormat);
               }
               if (items.length > 1 && movie.criticScorePercent === maxCritic) {
-                badges.push('Top Critic Pick');
+                badges.push(t.topCriticPick);
               }
               const isGroupLeader = items.length > 1 && maxVotes > 1 && entry.votes === maxVotes;
 
@@ -297,7 +384,7 @@ export function ShortlistDrawerModal({
                     <div className="compare-card__verdicts">
                       {isGroupLeader && (
                         <span className="verdict-pill verdict-pill--leader">
-                          <Award size={12} /> Group Favourite
+                          <Award size={12} /> {t.groupFavourite}
                         </span>
                       )}
                       {badges.map((b) => (
@@ -312,7 +399,7 @@ export function ShortlistDrawerModal({
                       id={`remove-shortlist-${session.id}`}
                       className="compare-card__remove"
                       onClick={() => onRemove(session.id)}
-                      aria-label={`Remove ${movie.title} at ${cinema.name}`}
+                      aria-label={`Remove ${displayTitle} at ${displayCinema}`}
                     >
                       <X size={15} />
                     </button>
@@ -321,8 +408,10 @@ export function ShortlistDrawerModal({
                   <div className="compare-card__film">
                     <MoviePoster movie={movie} size="sm" />
                     <div>
-                      <span className="compare-card__city-tag">{cityMeta.name}</span>
-                      <h3 className="compare-card__movie-title">{movie.title}</h3>
+                      <span className="compare-card__city-tag">
+                        {t.cityNames[session.city] ?? cityMeta.name}
+                      </span>
+                      <h3 className="compare-card__movie-title">{displayTitle}</h3>
                       <div className="compare-card__ratings-wrap">
                         <RatingsPillBar
                           movie={movie}
@@ -336,10 +425,10 @@ export function ShortlistDrawerModal({
                             id={`shortlist-trailer-${session.id}`}
                             className="trailer-pill-btn trailer-pill-btn--compact"
                             onClick={() => onWatchTrailer(movie)}
-                            aria-label={`Watch official trailer for ${movie.title}`}
+                            aria-label={`Watch official trailer for ${displayTitle}`}
                           >
                             <Play size={10} aria-hidden="true" fill="currentColor" />
-                            <span>Trailer</span>
+                            <span>{t.trailer}</span>
                           </button>
                         )}
                       </div>
@@ -381,18 +470,29 @@ export function ShortlistDrawerModal({
                         <span>
                           {win.startFormatted} → {win.finishFormatted}
                         </span>
-                        <a
-                          href={googleCalendarUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          id={`shortlist-gcal-${session.id}`}
-                          className="maps-inline-btn maps-inline-btn--spaced"
-                          aria-label={`Add ${movie.title} at ${cinema.name} to Google Calendar`}
-                        >
-                          <CalendarPlus size={11} aria-hidden="true" />
-                          <span>Add to Google Calendar</span>
-                          <ExternalLink size={10} aria-hidden="true" />
-                        </a>
+                        <div className="compare-calendar-actions">
+                          <a
+                            href={googleCalendarUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            id={`shortlist-gcal-${session.id}`}
+                            className="maps-inline-btn maps-inline-btn--spaced"
+                            aria-label={`Add ${displayTitle} at ${displayCinema} to Google Calendar`}
+                          >
+                            <CalendarPlus size={11} aria-hidden="true" />
+                            <span>{t.googleCalendar}</span>
+                            <ExternalLink size={10} aria-hidden="true" />
+                          </a>
+                          <button
+                            type="button"
+                            id={`shortlist-ics-${session.id}`}
+                            className="maps-inline-btn maps-inline-btn--spaced ics-btn"
+                            onClick={() => downloadIcsFile(calInput)}
+                          >
+                            <Download size={11} aria-hidden="true" />
+                            <span>{t.appleIcs}</span>
+                          </button>
+                        </div>
                       </dd>
                     </div>
 
@@ -438,7 +538,7 @@ export function ShortlistDrawerModal({
                       onClick={() => onVote(session.id)}
                     >
                       <ThumbsUp size={14} aria-hidden="true" />
-                      <span>Vote ({entry.votes})</span>
+                      <span>{t.vote(entry.votes)}</span>
                     </button>
 
                     {safeUrl && (
@@ -449,7 +549,7 @@ export function ShortlistDrawerModal({
                         id={`book-shortlist-${session.id}`}
                         className="btn-primary btn-primary--sm"
                       >
-                        <span>Book</span>
+                        <span>{t.book}</span>
                         <ExternalLink size={13} aria-hidden="true" />
                       </a>
                     )}

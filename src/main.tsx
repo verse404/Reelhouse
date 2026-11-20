@@ -14,3 +14,16 @@ createRoot(rootElement).render(
     <App />
   </StrictMode>
 );
+
+if (
+  'serviceWorker' in navigator &&
+  (window.location.protocol === 'https:' ||
+    window.location.hostname === '127.0.0.1' ||
+    window.location.hostname === 'localhost')
+) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./sw.js').catch(() => {
+      // Offline PWA service worker registration is progressive enhancement
+    });
+  });
+}

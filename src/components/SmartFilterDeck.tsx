@@ -8,12 +8,14 @@ import {
   Link2,
   LocateFixed,
   MapPin,
+  Navigation,
   RotateCcw,
   Search,
   Sparkles,
   X,
 } from 'lucide-react';
 import type {
+  AppLanguage,
   CalendarDayOption,
   CinemaVibe,
   CityMeta,
@@ -30,6 +32,7 @@ import {
   formatDistanceKm,
   formatSessionPrice,
 } from '../utils/formatters';
+import { getUiText } from '../utils/i18n';
 import { CITY_LOCATION_HUBS, type UserLocationOrigin } from '../utils/proximity';
 import { copyTextSafely, sanitizeSearchQuery } from '../utils/security';
 
@@ -49,6 +52,7 @@ export interface CinemaDropdownOption {
 
 interface SmartFilterDeckProps {
   cityMeta: CityMeta;
+  lang?: AppLanguage;
   calendarDays: CalendarDayOption[];
   movieOptions: MovieDropdownOption[];
   cinemaOptions: CinemaDropdownOption[];
@@ -115,6 +119,7 @@ const FINISH_BY_OPTIONS: Array<{ value: FinishByOption; label: string }> = [
 
 export function SmartFilterDeck({
   cityMeta,
+  lang = 'en',
   calendarDays,
   movieOptions,
   cinemaOptions,
@@ -138,6 +143,8 @@ export function SmartFilterDeck({
   onResetFilters,
 }: SmartFilterDeckProps) {
   const [copiedLink, setCopiedLink] = useState(false);
+  const t = getUiText(lang);
+  const displayCityName = t.cityNames[cityMeta.id] ?? cityMeta.name;
   const isComingSoon = filters.releaseStatus === 'coming_soon';
   const isShanghai = cityMeta.id === 'shanghai';
   const priceOptions: Array<{ value: PriceCapOption; label: string }> = isShanghai
@@ -172,9 +179,11 @@ export function SmartFilterDeck({
           className={`season-horizon-tab ${!isComingSoon ? 'season-horizon-tab--active' : ''}`}
           onClick={() => onChangeReleaseStatus('in_cinemas')}
         >
-          <span className="season-horizon-tab__title">In Cinemas</span>
+          <span className="season-horizon-tab__title">{t.inCinemas}</span>
           <span className="season-horizon-tab__sub">
-            Now Showing in {cityMeta.name} ({inCinemasFilmCount})
+            {lang === 'zh'
+              ? `${displayCityName}正在热映 (${inCinemasFilmCount} 部)`
+              : `Now Showing in ${cityMeta.name} (${inCinemasFilmCount})`}
           </span>
         </button>
 
@@ -186,9 +195,11 @@ export function SmartFilterDeck({
           className={`season-horizon-tab ${isComingSoon ? 'season-horizon-tab--active' : ''}`}
           onClick={() => onChangeReleaseStatus('coming_soon')}
         >
-          <span className="season-horizon-tab__title">Coming Soon</span>
+          <span className="season-horizon-tab__title">{t.comingSoon}</span>
           <span className="season-horizon-tab__sub">
-            Forthcoming Premieres &amp; Advance Galas ({comingSoonFilmCount})
+            {lang === 'zh'
+              ? `新片定档与点映前瞻 (${comingSoonFilmCount} 部)`
+              : `Forthcoming Premieres & Advance Galas (${comingSoonFilmCount})`}
           </span>
         </button>
       </div>
@@ -202,12 +213,16 @@ export function SmartFilterDeck({
         {!isComingSoon && (
           <div className="date-strip" role="tablist" aria-label="Screening date">
             {calendarDays.map((day) => {
-              const parts = formatCalendarChipParts(day.dateIso, cityMeta.timeZone);
+              const parts = formatCalendarChipParts(day.dateIso, cityMeta.timeZone, lang);
               const isSelected = filters.dateIso === day.dateIso;
               const topTag = day.isToday
-                ? 'Today'
+                ? lang === 'zh'
+                  ? '今天'
+                  : 'Today'
                 : day.isTomorrow
-                  ? 'Tomorrow'
+                  ? lang === 'zh'
+                    ? '明天'
+                    : 'Tomorrow'
                   : parts.weekdayShort;
 
               return (
@@ -418,7 +433,7 @@ export function SmartFilterDeck({
 
       {/* Row 3: Top Cinema Chain & Favorite Cinemas Filter Bar */}
       <div className="filter-row filter-row--chains">
-        <span className="filter-row__label">Chain</span>
+        <span className="filter-row__label">{lang === 'zh' ? '院线' : 'Chain'}</span>
         <div className="chip-scroll" role="group" aria-label={`${cityMeta.name} cinema chains and favorites`}>
           <button
             type="button"
@@ -429,7 +444,7 @@ export function SmartFilterDeck({
             aria-pressed={filters.chain === 'all' && !filters.favoritesOnly}
             onClick={() => onUpdateFilters({ chain: 'all', favoritesOnly: false })}
           >
-            All Chains
+            {t.allChains}
           </button>
 
           <button
@@ -446,7 +461,7 @@ export function SmartFilterDeck({
               aria-hidden="true"
               fill={filters.favoritesOnly ? 'currentColor' : 'none'}
             />
-            <span>Favorites ({cityFavoriteCount})</span>
+            <span>{t.favorites(cityFavoriteCount)}</span>
           </button>
 
           {chains.map(({ chain, count }) => {
@@ -471,7 +486,7 @@ export function SmartFilterDeck({
 
       {/* Row 3: Suburb Precinct Chips */}
       <div className="filter-row">
-        <span className="filter-row__label">Suburb</span>
+        <span className="filter-row__label">{lang === 'zh' ? '商圈' : 'Suburb'}</span>
         <div className="chip-scroll" role="group" aria-label={`${cityMeta.name} suburbs`}>
           <button
             type="button"
@@ -480,7 +495,7 @@ export function SmartFilterDeck({
             aria-pressed={filters.suburb === 'all'}
             onClick={() => onUpdateFilters({ suburb: 'all' })}
           >
-            All {cityMeta.name}
+            {t.allCity(displayCityName)}
           </button>
           {suburbs.map((suburb) => {
             const active = filters.suburb === suburb;
@@ -671,6 +686,20 @@ export function SmartFilterDeck({
             </button>
           )}
 
+          {!isComingSoon && isTodaySelected && (
+            <button
+              type="button"
+              id="make-it-only-toggle-btn"
+              className={`deal-toggle make-it-pill ${filters.makeItOnly ? 'deal-toggle--active' : ''}`}
+              aria-pressed={filters.makeItOnly}
+              title={t.makeItFilterTitle}
+              onClick={() => onUpdateFilters({ makeItOnly: !filters.makeItOnly })}
+            >
+              <Navigation size={13} aria-hidden="true" />
+              <span>{t.makeItFilterLabel}</span>
+            </button>
+          )}
+
           {!isComingSoon && (
             <button
               type="button"
@@ -680,9 +709,7 @@ export function SmartFilterDeck({
               onClick={() => onUpdateFilters({ dealsOnly: !filters.dealsOnly })}
             >
               <Sparkles size={13} aria-hidden="true" />
-              <span>
-                {isShanghai ? 'VIP & Tue Deals (特惠)' : 'Salon Deals (Mon & Tue)'}
-              </span>
+              <span>{t.dealsLabel(isShanghai)}</span>
             </button>
           )}
 
@@ -698,7 +725,7 @@ export function SmartFilterDeck({
             ) : (
               <Link2 size={13} aria-hidden="true" />
             )}
-            <span>{copiedLink ? 'Link Copied' : 'Share Link'}</span>
+            <span>{copiedLink ? t.linkCopied : t.shareLink}</span>
           </button>
 
           {activeFilterCount > 0 && (
@@ -709,7 +736,7 @@ export function SmartFilterDeck({
               onClick={onResetFilters}
             >
               <RotateCcw size={12} aria-hidden="true" />
-              <span>Reset ({activeFilterCount})</span>
+              <span>{t.reset(activeFilterCount)}</span>
             </button>
           )}
         </div>

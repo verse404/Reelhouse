@@ -1228,6 +1228,10 @@ async function fetchTmdbMovieFullById(tmdbId, apiKey, posterIndex, releaseStatus
     translations.find((t) => t.iso_639_1 === 'zh' && t.iso_3166_1 === 'CN') ||
     translations.find((t) => t.iso_639_1 === 'zh');
   const chineseTitle = zhEntry?.data?.title || d.original_title || d.title;
+  const chineseTagline =
+    typeof zhEntry?.data?.tagline === 'string' ? zhEntry.data.tagline.trim() : '';
+  const chineseSynopsis =
+    typeof zhEntry?.data?.overview === 'string' ? zhEntry.data.overview.trim() : '';
 
   const imdbId = d.external_ids?.imdb_id || '';
 
@@ -1285,6 +1289,8 @@ async function fetchTmdbMovieFullById(tmdbId, apiKey, posterIndex, releaseStatus
     languageNote: d.spoken_languages?.[0]?.english_name || 'English',
     tagline: d.tagline || `Directed by ${director}.`,
     synopsis: d.overview || 'Now screening in Melbourne and Sydney cinemas.',
+    ...(chineseTagline ? { chineseTagline } : {}),
+    ...(chineseSynopsis ? { chineseSynopsis } : {}),
     isFeaturedMarquee: posterIndex < 3 && releaseStatus === 'in_cinemas',
     posterTheme: POSTER_THEMES[posterIndex % POSTER_THEMES.length],
     castLead: castLead.length > 0 ? castLead : ['Ensemble Cast'],
@@ -1612,6 +1618,96 @@ async function fetchGoldenAgeSydneyDaysHtml(todayIso) {
   }));
 }
 
+/**
+ * Directly scrapes The Astor Theatre's St Kilda repertory sessions (`https://www.astortheatre.net.au/sessions`)
+ * capturing 35mm / 70mm film prints across upcoming weeks at zero SerpApi cost.
+ */
+async function fetchAstorMelbourneDaysHtml(todayIso) {
+  const res = await fetch('https://www.astortheatre.net.au/sessions', {
+    headers: {
+      'User-Agent':
+        'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+      Accept: 'text/html,application/xhtml+xml',
+    },
+    signal: AbortSignal.timeout(12000),
+  });
+  if (!res.ok) return [];
+  const html = await res.text();
+  const maxIso = addDaysIso(todayIso, 21);
+
+  const cards = html.split(/<div\s+class="eleven alpha post movie_preview/i).slice(1);
+  const dayGroups = new Map();
+
+  for (const card of cards) {
+    const sessMatch = card.match(
+      /href="https?:\/\/www\.astortheatre\.net\.au\/sessions\/(\d{4}-\d{2}-\d{2})-(\d{2})(\d{2})(?:-\d+)?"/i
+    );
+    if (!sessMatch) continue;
+    const isoDate = sessMatch[1];
+    const startTime24 = `${sessMatch[2]}:${sessMatch[3]}`;
+    if (isoDate < todayIso || isoDate > maxIso) continue;
+
+    const h2Match = card.match(/<h2[^>]*>[\s\S]*?<a[^>]*>([\s\S]*?)<\/a>/i);
+    if (!h2Match) continue;
+    const rawHeading = decodeHtmlEntities(h2Match[1].replace(/<[^>]+>/g, ''));
+    if (!rawHeading || /bazaar|market day|venue hire|trivia|gift card/i.test(rawHeading)) continue;
+
+    // Normalize double-feature seating duplicate blocks into a single clean film title
+    const pMatch = card.match(/<p>([\s\S]*?)<\/p>/i);
+    const pText = pMatch ? decodeHtmlEntities(pMatch[1].replace(/<[^>]+>/g, '')).trim() : '';
+
+    const techMatch = card.match(/<div\s+class="technical_tags[^"]*"[^>]*>([\s\S]*?)<\/div>/i);
+    const techText = techMatch ? decodeHtmlEntities(techMatch[1].replace(/<[^>]+>/g, '')) : '';
+
+    let workingTitle = rawHeading;
+    if (/GROUND FLOOR SEATING|BALCONY SEATING/i.test(workingTitle) && pText.includes('+')) {
+      workingTitle = pText.split(/\s+Double Feature\b/i)[0].split('+')[0].trim();
+    }
+    const cleanedTitle = toSmartTitleCase(
+      workingTitle
+        .replace(/\[[^\]]*\]/g, '')
+        .replace(/^(?:BFF26|MIFF|SSIFF|JFF)\s*:\s*/i, '')
+        .replace(/\s*[-–—]?\s*\(?(?:35mm|70mm|4K(?:\s+DCP)?)\s*(?:PRINT)?\)?\s*$/i, '')
+        .replace(/\s*(?:GROUND FLOOR SEATING|BALCONY SEATING|\+\s*TICKET PACKAGES).*$/i, '')
+        .replace(/\s+/g, ' ')
+        .trim()
+    );
+    if (!cleanedTitle) continue;
+
+    const tagSample = `${rawHeading} ${techText}`;
+    const showingType = /\b70mm\b/i.test(tagSample)
+      ? '70mm Film Print'
+      : /\b35mm\b/i.test(tagSample)
+        ? '35mm Film Print'
+        : /\bdolby\b/i.test(tagSample)
+          ? 'Dolby Atmos'
+          : 'Standard';
+
+    if (!dayGroups.has(isoDate)) {
+      dayGroups.set(isoDate, { isoDate, day: '', date: isoDate, moviesMap: new Map() });
+    }
+    const grp = dayGroups.get(isoDate);
+    if (!grp.moviesMap.has(cleanedTitle)) {
+      grp.moviesMap.set(cleanedTitle, new Map());
+    }
+    const typeMap = grp.moviesMap.get(cleanedTitle);
+    const prev = typeMap.get(showingType) || [];
+    if (!prev.includes(startTime24)) {
+      typeMap.set(showingType, [...prev, startTime24]);
+    }
+  }
+
+  return Array.from(dayGroups.values()).map((grp) => ({
+    isoDate: grp.isoDate,
+    day: grp.day,
+    date: grp.date,
+    movies: Array.from(grp.moviesMap.entries()).map(([name, typeMap]) => ({
+      name,
+      showing: Array.from(typeMap.entries()).map(([type, time]) => ({ type, time })),
+    })),
+  }));
+}
+
 const MOVING_STORY_BASE_URLS = {
   'mel-lido': 'https://www.lidocinemas.com.au',
   'mel-classic': 'https://www.classiccinemas.com.au',
@@ -1829,13 +1925,19 @@ async function fetchCinemaShowtimesViaSerpApi(venue, serpKey, prevVenueDays = nu
 
   const venueCacheFile = path.join(SERP_VENUE_CACHE_DIR, `${venue.id}_${todayIso}.json`);
 
-  // Direct 14-day HTML scrapers (0 SerpApi cost) always refresh daily (20h TTL)
+  // Direct multi-day HTML scrapers (0 SerpApi cost) always refresh daily (20h TTL)
   const isMovingStoryVenue = Boolean(MOVING_STORY_BASE_URLS[venue.id]);
-  if (venue.id === 'mel-imax' || venue.id === 'syd-golden-age' || isMovingStoryVenue) {
+  if (
+    venue.id === 'mel-imax' ||
+    venue.id === 'mel-astor' ||
+    venue.id === 'syd-golden-age' ||
+    isMovingStoryVenue
+  ) {
     const directRecent = await findRecentVenueCache(venue.id, todayIso, 20);
+    const minCachedDays = venue.id === 'mel-astor' ? 4 : 8;
     if (
       directRecent &&
-      countFutureDaysInBlocks(directRecent.days, directRecent.anchorIso, todayIso) >= 8
+      countFutureDaysInBlocks(directRecent.days, directRecent.anchorIso, todayIso) >= minCachedDays
     ) {
       return {
         venue,
@@ -1849,9 +1951,11 @@ async function fetchCinemaShowtimesViaSerpApi(venue, serpKey, prevVenueDays = nu
     const directDays =
       venue.id === 'mel-imax'
         ? await fetchImaxMelbourneDaysHtml()
-        : venue.id === 'syd-golden-age'
-          ? await fetchGoldenAgeSydneyDaysHtml(todayIso)
-          : await fetchMovingStoryVenueDaysHtml(MOVING_STORY_BASE_URLS[venue.id], todayIso);
+        : venue.id === 'mel-astor'
+          ? await fetchAstorMelbourneDaysHtml(todayIso)
+          : venue.id === 'syd-golden-age'
+            ? await fetchGoldenAgeSydneyDaysHtml(todayIso)
+            : await fetchMovingStoryVenueDaysHtml(MOVING_STORY_BASE_URLS[venue.id], todayIso);
     if (directDays.length > 0) {
       await fs.mkdir(SERP_VENUE_CACHE_DIR, { recursive: true });
       await fs.writeFile(venueCacheFile, JSON.stringify(directDays), 'utf-8');
@@ -2039,6 +2143,22 @@ export async function syncLiveCatalog() {
           const langNote = p.lang ? ` · ${p.lang}${p.tp || ''}` : '';
           const audName = `${hallRaw || 'Screening Hall'}${langNote}`;
           const livePriceCny = Number.parseFloat(p.vipPrice || '');
+          const shanghaiTags = [];
+          const rawLang = String(p.lang || '').trim();
+          if (rawLang === '原版' || rawLang === '英语') {
+            shanghaiTags.push('原版 Original Audio');
+          } else if (rawLang === '国语' || rawLang === '中文') {
+            shanghaiTags.push('国语 Mandarin');
+          } else if (rawLang === '粤语') {
+            shanghaiTags.push('粤语 Cantonese');
+          } else if (rawLang) {
+            shanghaiTags.push(rawLang);
+          }
+          const upperTp = String(p.tp || '').toUpperCase();
+          if (upperTp.includes('CINITY')) shanghaiTags.push('CINITY');
+          else if (upperTp.includes('4D')) shanghaiTags.push('4DX');
+          else if (upperTp.includes('3D')) shanghaiTags.push('3D');
+          if (/激光|LASER/i.test(hallRaw)) shanghaiTags.push('Laser');
 
           pendingRawSessions.push({
             normKey,
@@ -2050,6 +2170,7 @@ export async function syncLiveCatalog() {
             startMinutesFromMidnight: parsed.minutesFromMidnight,
             auditoriumName: audName,
             format,
+            accessibilityTags: shanghaiTags,
             livePriceCny: Number.isFinite(livePriceCny) && livePriceCny > 0 ? livePriceCny : null,
           });
         }
@@ -2159,6 +2280,12 @@ export async function syncLiveCatalog() {
             if (cinemaRef && !cinemaRef.supportedFormats.includes(format)) {
               cinemaRef.supportedFormats.push(format);
             }
+            const typeStr = String(sh.type || '');
+            const auTags = [];
+            if (/\b(1570|70mm)\b/i.test(typeStr)) auTags.push('70mm Film');
+            else if (/\b35mm\b/i.test(typeStr)) auTags.push('35mm Film');
+            if (/\brooftop\b/i.test(typeStr)) auTags.push('Rooftop');
+            if (/\bopen\s*captions?\b|\boc\b/i.test(typeStr)) auTags.push('Open Captions');
 
             const times = Array.isArray(sh.time) ? sh.time : [];
             for (const tStr of times) {
@@ -2175,6 +2302,7 @@ export async function syncLiveCatalog() {
                 startMinutesFromMidnight: parsed.minutesFromMidnight,
                 auditoriumName: sh.type ? `${sh.type} Auditorium` : `${venue.name} Auditorium`,
                 format,
+                accessibilityTags: auTags,
               });
             }
           }
@@ -2313,7 +2441,7 @@ export async function syncLiveCatalog() {
       dealLabel: pricing.dealLabel,
       priceBasis: pricing.priceBasis,
       priceNote: pricing.priceNote,
-      accessibilityTags: [],
+      accessibilityTags: Array.isArray(raw.accessibilityTags) ? raw.accessibilityTags : [],
       seatsRemainingLevel:
         raw.startMinutesFromMidnight >= 18 * 60 && raw.startMinutesFromMidnight <= 21 * 60
           ? 'filling'

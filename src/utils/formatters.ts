@@ -1,4 +1,4 @@
-import type { CityTimeZone, CurrencyCode } from '../types/cinema';
+import type { AppLanguage, CityTimeZone, CurrencyCode } from '../types/cinema';
 
 /**
  * Locale-aware formatting helpers using standard ECMAScript Intl APIs (`en-AU` / `zh-CN`).
@@ -119,25 +119,26 @@ export function formatRuntime(totalMinutes: number): string {
  */
 export function formatCalendarChipParts(
   dateIso: string,
-  timeZone: CityTimeZone
+  timeZone: CityTimeZone,
+  lang: AppLanguage = 'en'
 ): { weekdayShort: string; dayMonthShort: string; fullLabel: string } {
   const [year, month, day] = dateIso.split('-').map(Number);
-  // Use noon UTC so Melbourne/Sydney (+10/+11) stays on the exact intended calendar day
-  // Wait: noon UTC + 11h = 23:00 same day! Even safer: 02:00 UTC + 10/11h = 12:00/13:00 local day!
+  // 02:00 UTC guarantees AU (+10/+11) and Shanghai (+8) stay on the exact intended calendar day
   const safeUtcAnchor = new Date(Date.UTC(year, month - 1, day, 2, 0, 0));
+  const locale = lang === 'zh' ? 'zh-CN' : 'en-AU';
 
-  const weekdayShort = new Intl.DateTimeFormat('en-AU', {
+  const weekdayShort = new Intl.DateTimeFormat(locale, {
     weekday: 'short',
     timeZone,
   }).format(safeUtcAnchor);
 
-  const dayMonthShort = new Intl.DateTimeFormat('en-AU', {
+  const dayMonthShort = new Intl.DateTimeFormat(locale, {
     day: 'numeric',
     month: 'short',
     timeZone,
   }).format(safeUtcAnchor);
 
-  const fullLabel = new Intl.DateTimeFormat('en-AU', {
+  const fullLabel = new Intl.DateTimeFormat(locale, {
     weekday: 'long',
     day: 'numeric',
     month: 'long',
