@@ -271,7 +271,9 @@ export function MovieRatingsModal({ movie, onClose }: MovieRatingsModalProps) {
                 ? `${formatExactCount(douban.votes)} verified Douban voters (${formatExactCount(
                     douban.votes
                   )} 人评价).`
-                : 'Not yet rated on Douban (暂无评分).'}
+                : douban.score !== null
+                  ? 'Verified Douban rating synced from Douban film archive.'
+                  : 'Not yet rated on Douban (暂无评分).'}
             </p>
 
             {safeDoubanUrl && (

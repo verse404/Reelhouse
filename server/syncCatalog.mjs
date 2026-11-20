@@ -1151,20 +1151,78 @@ function resolveDayBlockDateIso(dayBlock, todayIso) {
   return null;
 }
 
+const CANONICAL_KEY_ALIASES = new Map([
+  ['the black ball', 'la bola negra'],
+  ['black ball', 'la bola negra'],
+]);
+
+const PREFERRED_DISPLAY_TITLES = new Map([
+  ['la bola negra', 'La Bola Negra'],
+  ['hexed', 'Hexed'],
+  ['giant the play', 'GIANT – The Play'],
+]);
+
+const VERIFIED_TMDB_OVERRIDES = new Map([
+  ['la bola negra', { tmdbId: 1422041, title: 'La Bola Negra' }],
+  ['hexed', { tmdbId: 1538497, title: 'Hexed' }],
+  ['fatherland', { tmdbId: 1437696, title: 'Fatherland' }],
+  ['hill', { tmdbId: 1420613, title: 'Hill' }],
+  ['the fox', { tmdbId: 1045968, title: 'The Fox' }],
+  ['naked', { tmdbId: 21450, title: 'Naked' }],
+  ['giant the play', { tmdbId: 1694097, title: 'GIANT – The Play' }],
+]);
+
 function normalizeMovieKey(rawTitle) {
-  return String(rawTitle || '')
+  const cleaned = decodeHtmlEntities(rawTitle)
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[’‘`]/g, "'")
+    .replace(/[–—−]/g, '-')
+    .replace(/^(?:disney['']?s|marvel studios['']?|pixar['']?s)\s+/i, '')
     .replace(/\([^)]*\)/g, '')
     .replace(/[^a-z0-9\u4e00-\u9fff]+/gi, ' ')
     .trim()
     .toLowerCase();
+  return CANONICAL_KEY_ALIASES.get(cleaned) || cleaned;
 }
 
-async function fetchJsonSafe(url, headers = {}) {
-  const res = await fetch(url, { headers, signal: AbortSignal.timeout(28000) });
-  if (!res.ok) {
-    throw new Error(`Upstream HTTP ${res.status}`);
+function getPreferredMovieDisplayTitle(rawTitle, tmdbTitle = '') {
+  const key = normalizeMovieKey(rawTitle || tmdbTitle);
+  const preferred = PREFERRED_DISPLAY_TITLES.get(key);
+  if (preferred) return preferred;
+  const decoded = decodeHtmlEntities(rawTitle)
+    .replace(/^(?:disney['’]s|marvel studios['’]s?|pixar['’]s?)\s+/i, '')
+    .trim();
+  return decoded || decodeHtmlEntities(tmdbTitle);
+}
+
+const RETRYABLE_HTTP_STATUSES = new Set([429, 500, 502, 503, 504]);
+const sleepSync = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function fetchJsonSafe(url, headers = {}, maxAttempts = 3) {
+  let lastError = null;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      const res = await fetch(url, { headers, signal: AbortSignal.timeout(28000) });
+      if (res.ok) {
+        return await res.json();
+      }
+      if (!RETRYABLE_HTTP_STATUSES.has(res.status) || attempt === maxAttempts - 1) {
+        throw new Error(`Upstream HTTP ${res.status}`);
+      }
+      const retryAfterSec = Number.parseInt(res.headers.get('retry-after') || '', 10);
+      const waitMs =
+        Number.isFinite(retryAfterSec) && retryAfterSec > 0
+          ? Math.min(retryAfterSec * 1000, 5000)
+          : 500 * (attempt + 1);
+      await sleepSync(waitMs);
+    } catch (err) {
+      lastError = err;
+      if (attempt === maxAttempts - 1) break;
+      await sleepSync(450 * (attempt + 1));
+    }
   }
-  return res.json();
+  throw lastError || new Error('Upstream request failed');
 }
 
 export function pickBestYoutubeTrailerKey(videosList) {
@@ -1414,15 +1472,16 @@ async function resolveMovieViaTmdb(rawTitle, tmdbApiKey, posterIndex, hintMeta =
         // Keep clean English/international title on `full.title` so cross-city films unify cleanly,
         // and guarantee exact Chinese cinema billing title on `ratings.douban.chineseTitle`!
         full.ratings.douban.chineseTitle = rawTitle;
+        full.title = getPreferredMovieDisplayTitle(full.title, full.title);
       } else {
-        full.title = rawTitle;
+        full.title = getPreferredMovieDisplayTitle(rawTitle, full.title);
       }
       return full;
     }
   } catch {
     // Fall through to fallback movie record
   }
-  return createFallbackMovieRecord(rawTitle, posterIndex, hintMeta);
+  return createFallbackMovieRecord(getPreferredMovieDisplayTitle(rawTitle), posterIndex, hintMeta);
 }
 
 /**
@@ -1431,13 +1490,74 @@ async function resolveMovieViaTmdb(rawTitle, tmdbApiKey, posterIndex, hintMeta =
  */
 const SERP_VENUE_CACHE_DIR = path.join(CACHE_DIR, 'serp_venues');
 
+const NAMED_HTML_ENTITIES = {
+  amp: '&',
+  quot: '"',
+  apos: "'",
+  lt: '<',
+  gt: '>',
+  nbsp: ' ',
+  ndash: '–',
+  mdash: '—',
+  lsquo: '‘',
+  rsquo: '’',
+  ldquo: '“',
+  rdquo: '”',
+  hellip: '…',
+  aacute: 'á',
+  eacute: 'é',
+  iacute: 'í',
+  oacute: 'ó',
+  uacute: 'ú',
+  ntilde: 'ñ',
+  uuml: 'ü',
+};
+
 function decodeHtmlEntities(str) {
   return String(str || '')
-    .replace(/&#8217;/g, '’')
-    .replace(/&#039;/g, "'")
-    .replace(/&amp;/g, '&')
-    .replace(/&quot;/g, '"')
+    .replace(/&#x([0-9a-f]+);/gi, (_, hex) => {
+      const cp = Number.parseInt(hex, 16);
+      if (cp >= 0x20 && cp <= 0x10ffff && !(cp >= 0xd800 && cp <= 0xdfff)) {
+        return String.fromCodePoint(cp);
+      }
+      return '';
+    })
+    .replace(/&#(\d+);/g, (_, dec) => {
+      const cp = Number.parseInt(dec, 10);
+      if (cp >= 0x20 && cp <= 0x10ffff && !(cp >= 0xd800 && cp <= 0xdfff)) {
+        return String.fromCodePoint(cp);
+      }
+      return '';
+    })
+    .replace(/&([a-z]+);/gi, (match, name) => NAMED_HTML_ENTITIES[name.toLowerCase()] ?? match)
+    .replace(/\s+/g, ' ')
     .trim();
+}
+
+function sanitizeVenueDaysHtmlEntities(days) {
+  if (!Array.isArray(days)) return days;
+  return days.map((dayBlock) => {
+    if (!dayBlock || typeof dayBlock !== 'object' || !Array.isArray(dayBlock.movies)) {
+      return dayBlock;
+    }
+    return {
+      ...dayBlock,
+      movies: dayBlock.movies.map((mv) => {
+        if (!mv || typeof mv !== 'object') return mv;
+        return {
+          ...mv,
+          name: decodeHtmlEntities(mv.name),
+          showing: Array.isArray(mv.showing)
+            ? mv.showing.map((sh) =>
+                sh && typeof sh === 'object'
+                  ? { ...sh, type: decodeHtmlEntities(sh.type) }
+                  : sh
+              )
+            : mv.showing,
+        };
+      }),
+    };
+  });
 }
 
 function toSmartTitleCase(raw) {
@@ -1943,7 +2063,7 @@ async function fetchCinemaShowtimesViaSerpApi(venue, serpKey, prevVenueDays = nu
         venue,
         todayIso: directRecent.anchorIso,
         realTodayIso: todayIso,
-        days: directRecent.days,
+        days: sanitizeVenueDaysHtmlEntities(directRecent.days),
         usedSerpCredit: false,
       };
     }
@@ -1957,9 +2077,10 @@ async function fetchCinemaShowtimesViaSerpApi(venue, serpKey, prevVenueDays = nu
             ? await fetchGoldenAgeSydneyDaysHtml(todayIso)
             : await fetchMovingStoryVenueDaysHtml(MOVING_STORY_BASE_URLS[venue.id], todayIso);
     if (directDays.length > 0) {
+      const cleanDirectDays = sanitizeVenueDaysHtmlEntities(directDays);
       await fs.mkdir(SERP_VENUE_CACHE_DIR, { recursive: true });
-      await fs.writeFile(venueCacheFile, JSON.stringify(directDays), 'utf-8');
-      return { venue, todayIso, realTodayIso: todayIso, days: directDays, usedSerpCredit: false };
+      await fs.writeFile(venueCacheFile, JSON.stringify(cleanDirectDays), 'utf-8');
+      return { venue, todayIso, realTodayIso: todayIso, days: cleanDirectDays, usedSerpCredit: false };
     }
   }
 
@@ -1973,7 +2094,7 @@ async function fetchCinemaShowtimesViaSerpApi(venue, serpKey, prevVenueDays = nu
       venue,
       todayIso: recentCache.anchorIso,
       realTodayIso: todayIso,
-      days: recentCache.days,
+      days: sanitizeVenueDaysHtmlEntities(recentCache.days),
       usedSerpCredit: false,
     };
   }
@@ -1985,7 +2106,7 @@ async function fetchCinemaShowtimesViaSerpApi(venue, serpKey, prevVenueDays = nu
       venue,
       todayIso,
       realTodayIso: todayIso,
-      days: prevVenueDays.days,
+      days: sanitizeVenueDaysHtmlEntities(prevVenueDays.days),
       usedSerpCredit: false,
     };
   }
@@ -2001,7 +2122,7 @@ async function fetchCinemaShowtimesViaSerpApi(venue, serpKey, prevVenueDays = nu
 
     try {
       const payload = await fetchJsonSafe(url.toString());
-      const days = Array.isArray(payload.showtimes) ? payload.showtimes : [];
+      const days = Array.isArray(payload.showtimes) ? sanitizeVenueDaysHtmlEntities(payload.showtimes) : [];
       if (days.length > 0) {
         await fs.mkdir(SERP_VENUE_CACHE_DIR, { recursive: true });
         await fs.writeFile(venueCacheFile, JSON.stringify(days), 'utf-8');
@@ -2020,7 +2141,7 @@ async function fetchCinemaShowtimesViaSerpApi(venue, serpKey, prevVenueDays = nu
       venue,
       todayIso: fallbackCache.anchorIso,
       realTodayIso: todayIso,
-      days: fallbackCache.days,
+      days: sanitizeVenueDaysHtmlEntities(fallbackCache.days),
       usedSerpCredit: false,
     };
   }
@@ -2029,7 +2150,7 @@ async function fetchCinemaShowtimesViaSerpApi(venue, serpKey, prevVenueDays = nu
       venue,
       todayIso,
       realTodayIso: todayIso,
-      days: prevVenueDays.days,
+      days: sanitizeVenueDaysHtmlEntities(prevVenueDays.days),
       usedSerpCredit: false,
     };
   }
@@ -2358,16 +2479,122 @@ export async function syncLiveCatalog() {
       (a, b) => (counts.get(b) || 0) - (counts.get(a) || 0)
     );
 
-    const resolvedList = await Promise.all(
-      topKeys.map((k, idx) =>
-        resolveMovieViaTmdb(
-          rawDiscoveredMovieTitles.get(k),
-          cfg.tmdbApiKey,
-          idx,
-          rawMovieHints.get(k) || null
+    async function resolveCinemaMovieRecord(normKey, rawTitle, tmdbApiKey, posterIndex, hintMeta) {
+      const override = VERIFIED_TMDB_OVERRIDES.get(normKey);
+      const preferredTitle = PREFERRED_DISPLAY_TITLES.get(normKey);
+      if (override?.tmdbId) {
+        try {
+          const direct = await fetchTmdbMovieFullById(
+            override.tmdbId,
+            tmdbApiKey,
+            posterIndex,
+            'in_cinemas'
+          );
+          if (direct) {
+            direct.title = preferredTitle || override.title || direct.title;
+            return direct;
+          }
+        } catch {
+          // Fall through to general search
+        }
+      }
+
+      const cleanDisplay = getPreferredMovieDisplayTitle(rawTitle);
+      const isChineseRaw = /[\u4e00-\u9fff]/.test(String(rawTitle || ''));
+      let resolved = await resolveMovieViaTmdb(
+        isChineseRaw ? rawTitle : cleanDisplay,
+        tmdbApiKey,
+        posterIndex,
+        hintMeta
+      );
+
+      // General safeguard against TMDB fallback or mismatched old classics (e.g. Hill -> Silent Hill)
+      const hasExplicitYear = /\((?:19|20)\d{2}\)/.test(String(rawTitle || ''));
+      const isFestivalOrEvent = /^(?:jiff|casffa|nt live|rbo cinema|doctor who day)\b|forging the one ring/i.test(
+        cleanDisplay
+      );
+      const resolvedNorm = normalizeMovieKey(resolved?.title || '');
+      const needsExactRecentRepair =
+        !isChineseRaw &&
+        !isFestivalOrEvent &&
+        resolved &&
+        (resolved.id.startsWith('live-film-') ||
+          (!hasExplicitYear && (resolved.releaseYear || 0) < 2024 && resolvedNorm !== normKey) ||
+          (resolvedNorm !== normKey && !resolvedNorm.includes(normKey)));
+
+      if (needsExactRecentRepair) {
+        for (const yr of ['2026', '2025', '']) {
+          try {
+            const url = new URL('https://api.themoviedb.org/3/search/movie');
+            url.searchParams.set('api_key', tmdbApiKey);
+            url.searchParams.set('query', cleanDisplay);
+            url.searchParams.set('language', 'en-US');
+            if (yr) url.searchParams.set('year', yr);
+            const searchPayload = await fetchJsonSafe(url.toString());
+            const hits = Array.isArray(searchPayload?.results) ? searchPayload.results : [];
+            const exactHits = hits.filter((h) => {
+              const t1 = normalizeMovieKey(h?.title || '');
+              const t2 = normalizeMovieKey(h?.original_title || '');
+              return t1 === normKey || t2 === normKey;
+            });
+            if (exactHits.length > 0) {
+              exactHits.sort((a, b) => {
+                const ay = Number.parseInt(String(a.release_date || '').slice(0, 4), 10) || 0;
+                const by = Number.parseInt(String(b.release_date || '').slice(0, 4), 10) || 0;
+                const aRecent = ay >= 2025 && ay <= 2027 ? 1 : 0;
+                const bRecent = by >= 2025 && by <= 2027 ? 1 : 0;
+                if (aRecent !== bRecent) return bRecent - aRecent;
+                return (b.popularity || 0) - (a.popularity || 0);
+              });
+              const repaired = await fetchTmdbMovieFullById(
+                exactHits[0].id,
+                tmdbApiKey,
+                posterIndex,
+                'in_cinemas'
+              );
+              if (repaired) {
+                repaired.title = getPreferredMovieDisplayTitle(rawTitle, repaired.title);
+                resolved = repaired;
+                break;
+              }
+            }
+          } catch {
+            // Try next year filter
+          }
+        }
+      }
+
+      if (resolved) {
+        if (!isChineseRaw) {
+          resolved.title = getPreferredMovieDisplayTitle(rawTitle, resolved.title);
+          if (resolved.ratings?.douban?.chineseTitle === rawTitle) {
+            resolved.ratings.douban.chineseTitle = resolved.title;
+          }
+        }
+      }
+      return resolved;
+    }
+
+    const resolvedList = [];
+    const TMDB_BATCH_SIZE = 6;
+    for (let start = 0; start < topKeys.length; start += TMDB_BATCH_SIZE) {
+      const slice = topKeys.slice(start, start + TMDB_BATCH_SIZE);
+      const batch = await Promise.all(
+        slice.map((k, localIdx) =>
+          resolveCinemaMovieRecord(
+            k,
+            rawDiscoveredMovieTitles.get(k),
+            cfg.tmdbApiKey,
+            start + localIdx,
+            rawMovieHints.get(k) || null
+          )
         )
-      )
-    );
+      );
+      resolvedList.push(...batch);
+      if (start + TMDB_BATCH_SIZE < topKeys.length) {
+        await sleepSync(90);
+      }
+    }
 
     // Deduplicate if two slightly different raw titles resolved to the same TMDB movie ID
     const byMovieId = new Map();

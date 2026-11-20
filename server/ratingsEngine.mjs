@@ -7,8 +7,14 @@ import zlib from 'node:zlib';
 
 const IMDB_DATASET_URL = 'https://datasets.imdbws.com/title.ratings.tsv.gz';
 const IMDB_DATASET_TTL_MS = 24 * 3_600_000; // Refresh official IMDb daily dump every 24h
+const DOUBAN_SETTLED_CACHE_TTL_MS = 7 * 24 * 3_600_000; // Settled Douban scores (500+ votes)
 const DOUBAN_CACHE_TTL_MS = 24 * 3_600_000; // Refresh live Douban scores every 24h
+const DOUBAN_UNRATED_TTL_MS = 12 * 3_600_000; // Retry confirmed-unrated films every 12h
+const MDBLIST_SETTLED_CACHE_TTL_MS = 7 * 24 * 3_600_000; // Settled RT/IMDb scores (50+ critic reviews)
 const MDBLIST_CACHE_TTL_MS = 24 * 3_600_000; // Refresh MDBList RT/IMDb scores every 24h
+const MDBLIST_EMPTY_TTL_MS = 6 * 3_600_000; // Retry empty MDBList entries every 6h
+const OMDB_CACHE_TTL_MS = 24 * 3_600_000; // Cache OMDb lookups to stay well under 1k/day cap
+const OMDB_EMPTY_TTL_MS = 6 * 3_600_000;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -104,28 +110,32 @@ export async function lookupOfficialImdbRatings(imdbIds, cacheDir) {
 
 /**
  * Queries MDBList (`api.mdblist.com`) for verified Rotten Tomatoes Tomatometer,
- * Rotten Tomatoes Audience (Popcornmeter), and IMDb ratings.
+ * Rotten Tomatoes Audience (Popcornmeter), and IMDb ratings, retrying transient 429/5xx responses.
  */
-async function fetchMdblistForMovie(movie, mdblistApiKey) {
-  if (!mdblistApiKey) return null;
+async function fetchJsonWithRetry(url, headers = {}, timeoutMs = 10000, maxAttempts = 2) {
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      const res = await fetch(url, { headers, signal: AbortSignal.timeout(timeoutMs) });
+      if (res.ok) {
+        return { ok: true, status: res.status, data: await res.json() };
+      }
+      if ((res.status === 429 || res.status >= 500) && attempt < maxAttempts - 1) {
+        await sleep(750 * (attempt + 1));
+        continue;
+      }
+      return { ok: false, status: res.status, data: null };
+    } catch {
+      if (attempt < maxAttempts - 1) {
+        await sleep(600 * (attempt + 1));
+        continue;
+      }
+      return { ok: false, status: 0, data: null };
+    }
+  }
+  return { ok: false, status: 0, data: null };
+}
 
-  const tmdbNumericId = String(movie.id || '').startsWith('tmdb-')
-    ? String(movie.id).slice(5)
-    : '';
-
-  const endpoint = movie.imdbId
-    ? `https://api.mdblist.com/imdb/movie/${encodeURIComponent(movie.imdbId)}?apikey=${encodeURIComponent(mdblistApiKey)}`
-    : tmdbNumericId
-      ? `https://api.mdblist.com/tmdb/movie/${encodeURIComponent(tmdbNumericId)}?apikey=${encodeURIComponent(mdblistApiKey)}`
-      : null;
-
-  if (!endpoint) return null;
-
-  const res = await fetch(endpoint, { signal: AbortSignal.timeout(10000) });
-  if (!res.ok) return null;
-  const data = await res.json();
-  if (!data || !Array.isArray(data.ratings)) return null;
-
+function parseMdblistRatingsArray(ratingsArray) {
   const normalizeRtUrl = (raw) => {
     if (typeof raw !== 'string' || !raw) return null;
     if (raw.startsWith('https://www.rottentomatoes.com/')) return raw;
@@ -133,7 +143,7 @@ async function fetchMdblistForMovie(movie, mdblistApiKey) {
     return null;
   };
 
-  const findSource = (src) => data.ratings.find((r) => r && r.source === src);
+  const findSource = (src) => ratingsArray.find((r) => r && r.source === src);
   const rtCritics = findSource('tomatoes');
   const rtAudience = findSource('popcorn') || findSource('tomatoesaudience');
   const imdbObj = findSource('imdb');
@@ -156,8 +166,41 @@ async function fetchMdblistForMovie(movie, mdblistApiKey) {
     out.imdbScore = Number(imdbObj.value.toFixed(1));
     out.imdbVotes = typeof imdbObj.votes === 'number' ? imdbObj.votes : 0;
   }
-
   return out;
+}
+
+async function fetchMdblistForMovie(movie, mdblistApiKey) {
+  if (!mdblistApiKey) return null;
+
+  const tmdbNumericId = String(movie.id || '').startsWith('tmdb-')
+    ? String(movie.id).slice(5)
+    : '';
+
+  const candidateUrls = [];
+  if (movie.imdbId) {
+    candidateUrls.push(
+      `https://api.mdblist.com/imdb/movie/${encodeURIComponent(movie.imdbId)}?apikey=${encodeURIComponent(mdblistApiKey)}`
+    );
+  }
+  if (tmdbNumericId) {
+    candidateUrls.push(
+      `https://api.mdblist.com/tmdb/movie/${encodeURIComponent(tmdbNumericId)}?apikey=${encodeURIComponent(mdblistApiKey)}`
+    );
+  }
+  if (candidateUrls.length === 0) return null;
+
+  let anyHttpOk = false;
+  for (const endpoint of candidateUrls) {
+    const resp = await fetchJsonWithRetry(endpoint, {}, 10000, 2);
+    if (!resp.ok || !resp.data || !Array.isArray(resp.data.ratings)) continue;
+    anyHttpOk = true;
+    const parsed = parseMdblistRatingsArray(resp.data.ratings);
+    if (Object.keys(parsed).length > 0) {
+      return parsed;
+    }
+  }
+
+  return anyHttpOk ? {} : null;
 }
 
 /**
@@ -174,10 +217,14 @@ async function fetchOmdbForMovie(movie, omdbApiKey) {
   }
   url.searchParams.set('apikey', omdbApiKey);
 
-  const res = await fetch(url.toString(), { signal: AbortSignal.timeout(8000) });
-  if (!res.ok) return null;
-  const data = await res.json();
-  if (!data || data.Response !== 'True') return null;
+  const resp = await fetchJsonWithRetry(url.toString(), {}, 8000, 2);
+  const data = resp.data;
+  if (!resp.ok || !data) return null;
+  if (data.Response !== 'True') {
+    // Do not treat quota-limit responses as valid empty records
+    if (String(data.Error || '').toLowerCase().includes('limit')) return null;
+    return {};
+  }
 
   const out = {};
   const imdbScore = Number.parseFloat(data.imdbRating);
@@ -244,62 +291,94 @@ async function batchLookupWikidataDoubanIds(imdbIds) {
   return map;
 }
 
+const NON_FEATURE_EVENT_PATTERN =
+  /^(?:jiff|casffa|nt live|rbo cinema|doctor who day)\b|forging the one ring|the play$/i;
+
+function isSuspiciousEventMovie(movie) {
+  return (
+    String(movie?.id || '').startsWith('live-film-') &&
+    NON_FEATURE_EVENT_PATTERN.test(String(movie?.title || ''))
+  );
+}
+
 async function fetchLiveDoubanForMovie(movie, knownSubjectId = null) {
+  if (!knownSubjectId && isSuspiciousEventMovie(movie)) {
+    return null;
+  }
+
+  const desktopHeaders = {
+    'User-Agent':
+      'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+    Referer: 'https://movie.douban.com/',
+    Accept: 'application/json,text/plain,*/*',
+  };
   const mobileHeaders = {
     'User-Agent':
       'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
-    Referer: 'https://m.douban.com/search/',
+    Referer: 'https://m.douban.com/',
     Accept: 'application/json,text/plain,*/*',
   };
 
   const cleanTitle = String(movie.title || '')
     .replace(/\([^)]*\)/g, '')
     .trim();
-  const zhHint = movie.ratings?.douban?.chineseTitle || '';
+  const zhHint = String(movie.ratings?.douban?.chineseTitle || '')
+    .replace(/[\u200e\u200f]/g, '')
+    .trim();
   const targetYear = Number(movie.releaseYear) || 2026;
+  const normClean = cleanTitle.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 
-  let subjectId = knownSubjectId ? String(knownSubjectId) : null;
+  let subjectId =
+    knownSubjectId && /^\d+$/.test(String(knownSubjectId)) ? String(knownSubjectId) : null;
   let chineseTitle = zhHint || movie.title;
   let score = null;
   let votes = 0;
+  let fetchedOk = false;
 
   if (!subjectId) {
-    // Only query search/subjects if Wikidata didn't already give us the exact Douban ID
-    const queries = Array.from(new Set([movie.imdbId, zhHint, cleanTitle].filter(Boolean)));
-    for (const q of queries) {
+    // Use `movie.douban.com/j/subject_suggest` (reliable 200 OK; `rexxar/search/subjects` returns 403 WAF)
+    const isRealChineseHint = /[\u4e00-\u9fff]/.test(zhHint);
+    const searchCandidates = [];
+    if (isRealChineseHint) searchCandidates.push(zhHint);
+    if (!String(movie.id || '').startsWith('live-film-') && cleanTitle.length >= 2) {
+      searchCandidates.push(cleanTitle);
+    }
+
+    for (const q of Array.from(new Set(searchCandidates))) {
       try {
-        const searchUrl = `https://m.douban.com/rexxar/api/v2/search/subjects?q=${encodeURIComponent(
-          q
-        )}&type=movie`;
-        const res = await fetch(searchUrl, {
-          headers: mobileHeaders,
+        const suggestUrl = `https://movie.douban.com/j/subject_suggest?q=${encodeURIComponent(q)}`;
+        const res = await fetch(suggestUrl, {
+          headers: desktopHeaders,
           signal: AbortSignal.timeout(7000),
         });
         if (!res.ok) continue;
-        const data = await res.json();
-        const items = data?.subjects?.items;
+        const items = await res.json();
         if (!Array.isArray(items) || items.length === 0) continue;
 
-        const targets = items.map((it) => it?.target).filter((t) => t && t.id);
-        const hit =
-          q === movie.imdbId && targets[0]
-            ? targets[0]
-            : targets.find((t) => {
-                const itemYear = Number.parseInt(t.year, 10);
-                return Number.isFinite(itemYear) && Math.abs(itemYear - targetYear) <= 1;
-              }) || null;
+        const hit = items.find((item) => {
+          if (!item || item.type !== 'movie' || !item.id || !/^\d+$/.test(String(item.id))) {
+            return false;
+          }
+          const itemYear = Number.parseInt(item.year, 10);
+          if (!Number.isFinite(itemYear) || Math.abs(itemYear - targetYear) > 1) return false;
+          const tTitle = String(item.title || '').trim();
+          const tSub = String(item.sub_title || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+          if (isRealChineseHint && q === zhHint) {
+            return tTitle === zhHint || tTitle.includes(zhHint) || zhHint.includes(tTitle);
+          }
+          return (
+            normClean.length >= 3 &&
+            (tSub === normClean || tSub.includes(normClean) || normClean.includes(tSub))
+          );
+        });
 
         if (hit?.id) {
           subjectId = String(hit.id);
           if (hit.title) chineseTitle = hit.title;
-          const rawVal = Number.parseFloat(hit?.rating?.value);
-          const rawCnt = Number.parseInt(hit?.rating?.count, 10);
-          if (Number.isFinite(rawVal) && rawVal > 0) score = Number(rawVal.toFixed(1));
-          if (Number.isFinite(rawCnt) && rawCnt > 0) votes = rawCnt;
           break;
         }
       } catch {
-        // Try next query candidate
+        // Try next candidate
       }
     }
   }
@@ -314,50 +393,61 @@ async function fetchLiveDoubanForMovie(movie, knownSubjectId = null) {
     Referer: `https://m.douban.com/movie/subject/${subjectId}/`,
   };
 
-  // Fetch exact Douban movie detail (`rating.value`, `rating.count`, `title`) if not already populated from search
-  if (score === null && votes === 0) {
+  // 1) Primary exact detail check (`m.douban.com/rexxar/api/v2/movie/<id>`)
+  try {
+    const detailRes = await fetch(
+      `https://m.douban.com/rexxar/api/v2/movie/${encodeURIComponent(subjectId)}`,
+      {
+        headers: subjectHeaders,
+        signal: AbortSignal.timeout(7000),
+      }
+    );
+    if (detailRes.ok) {
+      fetchedOk = true;
+      const detail = await detailRes.json();
+      if (detail?.title) chineseTitle = detail.title;
+      const rawVal = Number.parseFloat(detail?.rating?.value);
+      const rawCnt = Number.parseInt(detail?.rating?.count, 10);
+      if (Number.isFinite(rawVal) && rawVal > 0) score = Number(rawVal.toFixed(1));
+      if (Number.isFinite(rawCnt) && rawCnt > 0) votes = rawCnt;
+    }
+  } catch {
+    // Fall back to desktop abstract endpoint below
+  }
+
+  // 2) Secondary backup (`movie.douban.com/j/subject_abstract`) if rexxar was blocked/timed out
+  if (!fetchedOk) {
     try {
-      const detailRes = await fetch(
-        `https://m.douban.com/rexxar/api/v2/movie/${encodeURIComponent(subjectId)}`,
+      const absRes = await fetch(
+        `https://movie.douban.com/j/subject_abstract?subject_id=${encodeURIComponent(subjectId)}`,
         {
-          headers: subjectHeaders,
+          headers: {
+            ...desktopHeaders,
+            Referer: directUrl,
+          },
           signal: AbortSignal.timeout(7000),
         }
       );
-      if (detailRes.ok) {
-        const detail = await detailRes.json();
-        if (detail?.title) chineseTitle = detail.title;
-        const rawVal = Number.parseFloat(detail?.rating?.value);
-        const rawCnt = Number.parseInt(detail?.rating?.count, 10);
-        if (Number.isFinite(rawVal) && rawVal > 0) score = Number(rawVal.toFixed(1));
-        if (Number.isFinite(rawCnt) && rawCnt > 0) votes = rawCnt;
+      if (absRes.ok) {
+        const absData = await absRes.json();
+        const subj = absData?.subject;
+        if (subj && typeof subj === 'object') {
+          fetchedOk = true;
+          if (subj.title) {
+            chineseTitle = String(subj.title).split(' ')[0] || chineseTitle;
+          }
+          const rawVal = Number.parseFloat(subj.rate);
+          if (Number.isFinite(rawVal) && rawVal > 0) score = Number(rawVal.toFixed(1));
+        }
       }
     } catch {
-      // Keep fallback values
+      // Leave fetchedOk=false so cached score isn't overwritten with null
     }
   }
 
-  let starBreakdownPercent = null;
-  if (score !== null) {
-    try {
-      const ratingRes = await fetch(
-        `https://m.douban.com/rexxar/api/v2/movie/${encodeURIComponent(subjectId)}/rating`,
-        {
-          headers: subjectHeaders,
-          signal: AbortSignal.timeout(6000),
-        }
-      );
-      if (ratingRes.ok) {
-        const rtStats = await ratingRes.json();
-        if (Array.isArray(rtStats?.stats) && rtStats.stats.length === 5) {
-          starBreakdownPercent = [...rtStats.stats]
-            .reverse()
-            .map((p) => Math.round(Number(p || 0) * 100));
-        }
-      }
-    } catch {
-      // Fall back to estimated histogram if /rating times out
-    }
+  // CRITICAL: Do not emit an unverified null score when Douban blocked/failed HTTP checks!
+  if (!fetchedOk && score === null) {
+    return null;
   }
 
   return {
@@ -365,8 +455,9 @@ async function fetchLiveDoubanForMovie(movie, knownSubjectId = null) {
     chineseTitle,
     score,
     votes,
-    starBreakdownPercent,
+    starBreakdownPercent: null,
     url: directUrl,
+    fetchedOk: true,
   };
 }
 
@@ -409,70 +500,169 @@ export async function enrichMoviesWithTrueRatings(
 
   const doubanCacheFile = path.join(cacheDir, 'douban_ratings_cache.json');
   const mdblistCacheFile = path.join(cacheDir, 'mdblist_ratings_cache.json');
+  const omdbCacheFile = path.join(cacheDir, 'omdb_ratings_cache.json');
 
-  const doubanCache = await loadJsonCache(doubanCacheFile);
-  const mdblistCache = await loadJsonCache(mdblistCacheFile);
+  const [doubanCache, mdblistCache, omdbCache] = await Promise.all([
+    loadJsonCache(doubanCacheFile),
+    loadJsonCache(mdblistCacheFile),
+    loadJsonCache(omdbCacheFile),
+  ]);
   const now = Date.now();
 
-  // 1. Official IMDb daily dataset lookup + Wikidata IMDb->Douban batch mapping
+  // Purge known false-positive Douban matches on live event titles (e.g. JIFF / Rings of Power)
+  for (const movie of movies) {
+    if (isSuspiciousEventMovie(movie)) {
+      delete doubanCache[movie.imdbId || movie.id];
+    }
+  }
+
+  // 1. Official IMDb daily dataset lookup + Wikidata IMDb->Douban batch mapping (only for missing subjectIds!)
   const imdbIds = movies.map((m) => m.imdbId).filter(Boolean);
+  const unmappedImdbIds = movies
+    .filter((m) => {
+      if (!m.imdbId) return false;
+      const existing = doubanCache[m.imdbId]?.data;
+      return !(existing && /^\d+$/.test(String(existing.subjectId || '')));
+    })
+    .map((m) => m.imdbId);
+
   const [officialImdbMap, wikidataDoubanMap] = await Promise.all([
     lookupOfficialImdbRatings(imdbIds, cacheDir),
-    batchLookupWikidataDoubanIds(imdbIds),
+    batchLookupWikidataDoubanIds(unmappedImdbIds),
   ]);
 
-  // 2. Fetch OMDb + MDBList in parallel batches of 6, then fetch Douban sequentially with polite 220ms spacing
+  // 2. Fetch OMDb + MDBList in parallel batches of 5 with polite pacing and stale-score preservation
   const omdbMap = new Map();
   const mdbMap = new Map();
-  const BATCH_SIZE = 6;
+  const BATCH_SIZE = 5;
   for (let start = 0; start < movies.length; start += BATCH_SIZE) {
     const slice = movies.slice(start, start + BATCH_SIZE);
     await Promise.all(
       slice.map(async (movie) => {
         const cacheKey = movie.imdbId || movie.id;
         const [omdbRes, mdbRes] = await Promise.all([
-          fetchOmdbForMovie(movie, omdbApiKey).catch(() => null),
+          (async () => {
+            if (!omdbApiKey) return null;
+            const cached = omdbCache[cacheKey];
+            const cachedData = cached?.data || null;
+            const ttl =
+              cachedData && Object.keys(cachedData).length > 0
+                ? OMDB_CACHE_TTL_MS
+                : OMDB_EMPTY_TTL_MS;
+            if (!forceRefresh && cached && now - cached.ts < ttl) {
+              return cachedData;
+            }
+            const fresh = await fetchOmdbForMovie(movie, omdbApiKey).catch(() => null);
+            if (fresh !== null) {
+              const merged =
+                Object.keys(fresh).length > 0 || !cachedData || Object.keys(cachedData).length === 0
+                  ? fresh
+                  : cachedData;
+              omdbCache[cacheKey] = { ts: now, data: merged };
+              return merged;
+            }
+            return cachedData;
+          })(),
           (async () => {
             if (!mdblistApiKey) return null;
             const cached = mdblistCache[cacheKey];
-            if (!forceRefresh && cached && now - cached.ts < MDBLIST_CACHE_TTL_MS) {
-              return cached.data;
+            const cachedData = cached?.data || null;
+            const isSettled =
+              cachedData &&
+              typeof cachedData.tomatometerPercent === 'number' &&
+              (cachedData.criticReviews || 0) >= 50;
+            const hasAnyScore =
+              cachedData &&
+              (typeof cachedData.tomatometerPercent === 'number' ||
+                typeof cachedData.imdbScore === 'number');
+            const ttl = isSettled
+              ? MDBLIST_SETTLED_CACHE_TTL_MS
+              : hasAnyScore
+                ? MDBLIST_CACHE_TTL_MS
+                : MDBLIST_EMPTY_TTL_MS;
+            if (!forceRefresh && cached && now - cached.ts < ttl) {
+              return cachedData;
             }
             const fresh = await fetchMdblistForMovie(movie, mdblistApiKey).catch(() => null);
-            if (fresh) {
-              mdblistCache[cacheKey] = { ts: now, data: fresh };
+            if (fresh !== null) {
+              const merged =
+                cachedData && Object.keys(cachedData).length > 0
+                  ? { ...cachedData, ...fresh }
+                  : fresh;
+              mdblistCache[cacheKey] = { ts: now, data: merged };
+              return merged;
             }
-            return fresh;
+            return cachedData;
           })(),
         ]);
         omdbMap.set(cacheKey, omdbRes);
         mdbMap.set(cacheKey, mdbRes);
       })
     );
+    if (start + BATCH_SIZE < movies.length) {
+      await sleep(120);
+    }
   }
 
+  let consecutiveDoubanFailures = 0;
   for (const movie of movies) {
     const cacheKey = movie.imdbId || movie.id;
     const omdbRes = omdbMap.get(cacheKey) || null;
     const mdbRes = mdbMap.get(cacheKey) || null;
 
-    // --- B. Live Douban (uses Wikidata Douban ID first, avoiding search rate limits) ---
+    // --- B. Live Douban (uses cached/Wikidata Douban ID first, preserves valid scores if rate-limited) ---
     let doubanRes = null;
     const cachedDouban = doubanCache[cacheKey];
-    const knownDoubanId = movie.imdbId ? wikidataDoubanMap.get(movie.imdbId) || null : null;
+    const cachedData = cachedDouban?.data || null;
+    const cachedSubjectId =
+      cachedData && /^\d+$/.test(String(cachedData.subjectId || ''))
+        ? String(cachedData.subjectId)
+        : null;
+    const knownDoubanId =
+      (movie.imdbId ? wikidataDoubanMap.get(movie.imdbId) : null) || cachedSubjectId || null;
+
+    const cachedHasScore = Boolean(cachedData && cachedData.score !== null && cachedData.score > 0);
+    const doubanTtl = cachedHasScore
+      ? (cachedData.votes || 0) >= 500
+        ? DOUBAN_SETTLED_CACHE_TTL_MS
+        : DOUBAN_CACHE_TTL_MS
+      : cachedData?.fetchedOk
+        ? DOUBAN_UNRATED_TTL_MS
+        : 0; // Force re-check of legacy unverified score:null entries!
+
     if (
       !forceRefresh &&
-      cachedDouban &&
-      cachedDouban.data &&
-      now - cachedDouban.ts < DOUBAN_CACHE_TTL_MS
+      cachedData &&
+      doubanTtl > 0 &&
+      now - cachedDouban.ts < doubanTtl
     ) {
-      doubanRes = cachedDouban.data;
+      doubanRes = cachedData;
+    } else if (isSuspiciousEventMovie(movie)) {
+      doubanRes = null;
+    } else if (consecutiveDoubanFailures >= 5 && !knownDoubanId) {
+      // Avoid hammering Douban search after sustained 403/429 responses
+      doubanRes = cachedData;
     } else {
-      doubanRes = await fetchLiveDoubanForMovie(movie, knownDoubanId).catch(() => null);
-      if (doubanRes) {
-        doubanCache[cacheKey] = { ts: now, data: doubanRes };
+      const freshDouban = await fetchLiveDoubanForMovie(movie, knownDoubanId).catch(() => null);
+      if (freshDouban && freshDouban.score !== null) {
+        if (!freshDouban.starBreakdownPercent && cachedData?.starBreakdownPercent) {
+          freshDouban.starBreakdownPercent = cachedData.starBreakdownPercent;
+        }
+        doubanCache[cacheKey] = { ts: now, data: freshDouban };
+        doubanRes = freshDouban;
+        consecutiveDoubanFailures = 0;
+      } else if (freshDouban && cachedHasScore) {
+        // Never overwrite a valid previously verified Douban score with null
+        doubanRes = cachedData;
+      } else if (freshDouban) {
+        doubanCache[cacheKey] = { ts: now, data: freshDouban };
+        doubanRes = freshDouban;
+        consecutiveDoubanFailures = 0;
+      } else {
+        consecutiveDoubanFailures += 1;
+        doubanRes = cachedHasScore ? cachedData : cachedData?.subjectId ? cachedData : null;
       }
-      await sleep(knownDoubanId ? 180 : 650);
+      await sleep(knownDoubanId ? 850 : 950);
     }
 
     // --- C. Reconcile True IMDb ---
@@ -496,8 +686,11 @@ export async function enrichMoviesWithTrueRatings(
       `https://www.rottentomatoes.com/search?search=${encodeURIComponent(movie.title)}`;
 
     // --- E. Reconcile True Douban ---
-    const zhTitle =
-      doubanRes?.chineseTitle || movie.ratings?.douban?.chineseTitle || movie.title;
+    const zhTitle = String(
+      doubanRes?.chineseTitle || movie.ratings?.douban?.chineseTitle || movie.title
+    )
+      .replace(/[\u200e\u200f]/g, '')
+      .trim();
     const trueDoubanScore = doubanRes?.score ?? null;
     const trueDoubanVotes = doubanRes?.votes ?? 0;
     const trueDoubanStars =
@@ -512,7 +705,9 @@ export async function enrichMoviesWithTrueRatings(
     const doubanNote =
       trueDoubanVotes > 0
         ? `${trueDoubanVotes} 人评价`
-        : '暂无评分';
+        : trueDoubanScore !== null
+          ? '豆瓣已收录评分'
+          : '暂无评分';
 
     movie.ratings = {
       imdb: {
@@ -549,6 +744,7 @@ export async function enrichMoviesWithTrueRatings(
   await Promise.all([
     saveJsonCache(doubanCacheFile, doubanCache),
     saveJsonCache(mdblistCacheFile, mdblistCache),
+    saveJsonCache(omdbCacheFile, omdbCache),
   ]);
 
   return movies;
