@@ -16,6 +16,7 @@ createRoot(rootElement).render(
 );
 
 if (
+  import.meta.env.VITE_STATIC_ONLY !== '1' &&
   'serviceWorker' in navigator &&
   (window.location.protocol === 'https:' ||
     window.location.hostname === '127.0.0.1' ||

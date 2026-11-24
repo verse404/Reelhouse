@@ -2281,7 +2281,9 @@ export async function syncLiveCatalog() {
           .slice(0, 4);
         const rawImg =
           typeof mv.img === 'string' && mv.img.startsWith('https://')
-            ? mv.img.replace(/\?imageMogr2.*$/, '')
+            ? mv.img.includes('pipi.cn') && !mv.img.includes('?')
+              ? `${mv.img}?imageMogr2/quality/80`
+              : mv.img
             : undefined;
         rawMovieHints.set(normKey, {
           runtimeMinutes: Number(mv.dur) || 0,
@@ -2951,10 +2953,29 @@ export async function syncLiveCatalog() {
   const serializedSnapshot = JSON.stringify(snapshot, null, 2);
   await fs.writeFile(CACHE_FILE, serializedSnapshot, 'utf-8');
 
-  // Keep static public/live_catalog.json synchronized for standalone static deployments
+  // Keep static public/live_catalog.json + per-city static slices synchronized for standalone static deployments
   try {
-    const publicCatalogPath = path.join(PROJECT_ROOT, 'public', 'live_catalog.json');
-    await fs.writeFile(publicCatalogPath, serializedSnapshot, 'utf-8');
+    const publicDir = path.join(PROJECT_ROOT, 'public');
+    await fs.writeFile(path.join(publicDir, 'live_catalog.json'), serializedSnapshot, 'utf-8');
+    for (const cityKey of ['melbourne', 'sydney', 'shanghai']) {
+      const citySessions = (snapshot.sessions || []).filter((s) => s.city === cityKey);
+      const cityMovieIds = new Set(citySessions.map((s) => s.movieId));
+      const citySlice = {
+        ...snapshot,
+        city: cityKey,
+        cinemas: (snapshot.cinemas || []).filter((c) => c.city === cityKey),
+        sessions: citySessions,
+        movies: (snapshot.movies || []).filter((m) => cityMovieIds.has(m.id)),
+        comingSoonMovies: (snapshot.comingSoonMovies || []).filter((m) =>
+          (m.upcomingVenues || []).some((v) => v.city === cityKey)
+        ),
+      };
+      await fs.writeFile(
+        path.join(publicDir, `live_catalog_${cityKey}.json`),
+        JSON.stringify(citySlice),
+        'utf-8'
+      );
+    }
   } catch {
     // Ignore if public/ is absent in minimal runtime containers
   }

@@ -131,6 +131,9 @@ export function getSafePosterImageUrl(rawUrl?: string): string | null {
       return parsed.toString();
     }
     if ((host === 'pipi.cn' || host.endsWith('.pipi.cn')) && parsed.pathname.length > 1) {
+      if (!parsed.search) {
+        parsed.search = '?imageMogr2/quality/80';
+      }
       return parsed.toString();
     }
     return null;

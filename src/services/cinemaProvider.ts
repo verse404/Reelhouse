@@ -151,11 +151,21 @@ class HybridAustralianCinemaProvider implements CinemaDataProvider {
         this.fullStaticLoaded = false;
       }
 
+      const isStaticOnlyBuild = import.meta.env.VITE_STATIC_ONLY === '1';
       let isFullStaticFallback = false;
-      let response = await fetch(`/api/catalog?city=${encodeURIComponent(city)}`, {
-        method: 'GET',
-        headers: { Accept: 'application/json' },
-      }).catch(() => null);
+      let response: Response | null = null;
+
+      if (isStaticOnlyBuild) {
+        response = await fetch(`./live_catalog_${encodeURIComponent(city)}.json`, {
+          method: 'GET',
+          headers: { Accept: 'application/json' },
+        }).catch(() => null);
+      } else {
+        response = await fetch(`/api/catalog?city=${encodeURIComponent(city)}`, {
+          method: 'GET',
+          headers: { Accept: 'application/json' },
+        }).catch(() => null);
+      }
 
       const contentType = response?.headers.get('content-type') || '';
       if (!response || !response.ok || !contentType.includes('application/json')) {
