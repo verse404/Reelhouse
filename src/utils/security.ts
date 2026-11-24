@@ -704,8 +704,19 @@ export function parseValidatedUrlFilters(search: string): Partial<FilterState> {
     }
 
     const date = params.get('date');
-    if (date && SAFE_ISO_DATE_REGEX.test(date)) {
-      out.dateIso = date;
+    if (date) {
+      const validDates = Array.from(
+        new Set(
+          date
+            .split(',')
+            .map((s) => s.trim())
+            .filter((s) => SAFE_ISO_DATE_REGEX.test(s))
+        )
+      ).slice(0, 14);
+      if (validDates.length > 0) {
+        out.dateIso = validDates[0];
+        out.selectedDates = validDates;
+      }
     }
 
     const film = params.get('film');
@@ -918,8 +929,15 @@ export function buildShareableFilterQueryString(
   if (filters.browseMode !== 'gallery') {
     params.set('mode', filters.browseMode);
   }
-  if (filters.releaseStatus === 'in_cinemas' && filters.dateIso !== defaultTodayIso) {
-    params.set('date', filters.dateIso);
+  const activeDates =
+    filters.selectedDates && filters.selectedDates.length > 0
+      ? filters.selectedDates
+      : [filters.dateIso];
+  if (
+    filters.releaseStatus === 'in_cinemas' &&
+    (activeDates.length > 1 || activeDates[0] !== defaultTodayIso)
+  ) {
+    params.set('date', activeDates.join(','));
   }
   if (filters.selectedMovieId !== 'all') {
     params.set('film', filters.selectedMovieId);

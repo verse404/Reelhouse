@@ -5025,5 +5025,142 @@ html[lang='zh-CN'] .editorial-masthead__title {
   }
 }
 
+/* ==========================================================================
+   Multi-Day Date Selection & Per-Day Grouped Sessions
+   ========================================================================== */
+
+.date-strip-col {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+.date-multi-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.date-multi-pill,
+.date-preset-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.24rem 0.56rem;
+  border: 1px solid var(--hairline);
+  background: var(--bg-surface-2);
+  color: var(--ink-secondary);
+  font-family: var(--font-mono);
+  font-size: 0.64rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: border-color 0.16s ease, color 0.16s ease, background-color 0.16s ease;
+}
+
+.date-multi-pill:hover,
+.date-preset-pill:hover {
+  border-color: var(--hairline-amber);
+  color: var(--ink-primary);
+}
+
+.date-multi-pill--active,
+.date-preset-pill--active {
+  border-color: var(--accent-amber);
+  background: var(--accent-amber-soft);
+  color: var(--accent-amber-bright);
+}
+
+.date-preset-pill--clear {
+  border-color: var(--hairline-strong);
+  color: var(--ink-muted);
+}
+
+.date-preset-pill--clear:hover {
+  border-color: var(--accent-terracotta);
+  color: var(--accent-terracotta);
+}
+
+.date-chip__check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  border: 1px solid var(--hairline-strong);
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  line-height: 1;
+  color: var(--ink-muted);
+}
+
+.date-chip--multi {
+  flex: 1 0 108px;
+}
+
+.date-chip--multi .date-chip__weekday {
+  padding-inline-end: 1.25rem;
+}
+
+.date-chip--multi .date-chip__check {
+  position: absolute;
+  top: 0.34rem;
+  right: 0.34rem;
+}
+
+.date-chip__check--on {
+  border-color: var(--accent-amber);
+  background: var(--accent-amber);
+  color: var(--ink-on-accent);
+}
+
+.gallery-movie-dates__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 0.75rem;
+}
+
+.session-date-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 0.72rem;
+  min-width: 0;
+}
+
+.session-date-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.38rem;
+  min-width: 0;
+}
+
+.session-date-group__header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding-bottom: 0.24rem;
+  border-bottom: 1px dashed var(--hairline);
+}
+
+.session-date-group__label {
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--accent-amber);
+}
+
+.session-date-group__count {
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  color: var(--ink-muted);
+}
+
+
 
 

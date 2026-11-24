@@ -29,10 +29,11 @@ import {
 } from '../utils/security';
 import { MoviePoster } from './MoviePoster';
 import { RatingsPillBar } from './RatingsPillBar';
-import { SessionPill } from './SessionPill';
+import { SessionListByDate } from './SessionListByDate';
 
 interface CinemaMapViewProps {
   cityMeta: CityMeta;
+  isMultiDay?: boolean;
   lang?: AppLanguage;
   edition: SalonEdition;
   allCityCinemas: Cinema[];
@@ -83,6 +84,7 @@ function getMetersPerPixel(lat: number, zoom: number): number {
 
 export function CinemaMapView({
   cityMeta,
+  isMultiDay = false,
   lang = 'en',
   edition,
   allCityCinemas,
@@ -678,18 +680,15 @@ export function CinemaMapView({
                       </div>
                     </div>
 
-                    <div className="session-pills-wrap">
-                      {sessions.map((session) => (
-                        <SessionPill
-                          key={session.id}
-                          session={session}
-                          lang={lang}
-                          isShortlisted={shortlistedIds.has(session.id)}
-                          onSelectSession={onSelectSession}
-                          onToggleShortlist={onToggleShortlist}
-                        />
-                      ))}
-                    </div>
+                    <SessionListByDate
+                      sessions={sessions}
+                      timeZone={cityMeta.timeZone}
+                      lang={lang}
+                      showDateGroups={isMultiDay}
+                      shortlistedIds={shortlistedIds}
+                      onSelectSession={onSelectSession}
+                      onToggleShortlist={onToggleShortlist}
+                    />
                   </div>
                 ))
               )}

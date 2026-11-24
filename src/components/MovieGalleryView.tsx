@@ -3,6 +3,7 @@ import {
   ArrowLeft,
   ArrowRight,
   Calendar,
+  Check,
   Clock,
   Compass,
   ExternalLink,
@@ -16,6 +17,7 @@ import {
   Star,
   Tag,
   Train,
+  X,
 } from 'lucide-react';
 import type {
   AppLanguage,
@@ -46,7 +48,7 @@ import {
 } from '../utils/security';
 import { MoviePoster } from './MoviePoster';
 import { RatingsPillBar } from './RatingsPillBar';
-import { SessionPill } from './SessionPill';
+import { SessionListByDate } from './SessionListByDate';
 import type { MovieWithVenueSessions } from './MovieBrowseView';
 
 export interface GalleryMovieSummary {
@@ -73,6 +75,7 @@ interface MovieGalleryViewProps {
   selectedMovieItem: MovieWithVenueSessions | null;
   selectedMovieDates: SelectedMovieDateSummary[];
   activeDateIso: string;
+  selectedDates: string[];
   cityMeta: CityMeta;
   lang?: AppLanguage;
   userOrigin: UserLocationOrigin;
@@ -84,6 +87,7 @@ interface MovieGalleryViewProps {
   onPickMovie: (movieId: string, preferredDateIso?: string | null) => void;
   onBackToAllMovies: () => void;
   onSelectDate: (dateIso: string) => void;
+  onSelectDates: (dates: string[]) => void;
   onSwitchToFullSchedule: () => void;
   onSelectSession: (session: ScreeningSession) => void;
   onToggleShortlist: (sessionId: string) => void;
@@ -128,6 +132,7 @@ export function MovieGalleryView({
   selectedMovieItem,
   selectedMovieDates,
   activeDateIso,
+  selectedDates,
   cityMeta,
   lang = 'en',
   userOrigin,
@@ -139,6 +144,7 @@ export function MovieGalleryView({
   onPickMovie,
   onBackToAllMovies,
   onSelectDate,
+  onSelectDates,
   onSwitchToFullSchedule,
   onSelectSession,
   onToggleShortlist,
@@ -152,6 +158,11 @@ export function MovieGalleryView({
   const [gallerySort, setGallerySort] = useState<GallerySortOption>('recommended');
   const [venueSort, setVenueSort] = useState<VenueSortOption>('closest');
   const [localFormatFilter, setLocalFormatFilter] = useState<FormatType | 'all'>('all');
+  const [detailMultiDateMode, setDetailMultiDateMode] = useState(false);
+
+  const effectiveSelectedDates = selectedDates.length > 0 ? selectedDates : [activeDateIso];
+  const selectedDateSet = new Set(effectiveSelectedDates);
+  const isDetailMultiActive = detailMultiDateMode || effectiveSelectedDates.length > 1;
 
   const t = getUiText(lang);
   const isShanghai = cityMeta.id === 'shanghai';
@@ -368,68 +379,188 @@ export function MovieGalleryView({
           </div>
         </article>
 
-        {/* Per-Movie 7-Day Date Selector */}
-        {selectedMovieDates.length > 0 && (
-          <div
-            className="gallery-movie-dates"
-            role="tablist"
-            aria-label={lang === 'zh' ? '选择观影日期' : 'Choose screening date for this movie'}
-          >
-            <span className="gallery-movie-dates__label">
-              <Calendar size={13} aria-hidden="true" />
-              <span>{lang === 'zh' ? '该片排片日期' : 'Dates Screening This Film'}</span>
-            </span>
-            <div className="gallery-movie-dates__strip">
-              {selectedMovieDates.map(({ day, sessionCount, cinemaCount }) => {
-                const parts = formatCalendarChipParts(day.dateIso, cityMeta.timeZone, lang);
-                const isSelected = day.dateIso === activeDateIso;
-                const dayHead = day.isToday
-                  ? lang === 'zh'
-                    ? '今天'
-                    : 'Today'
-                  : day.isTomorrow
-                    ? lang === 'zh'
-                      ? '明天'
-                      : 'Tomorrow'
-                    : parts.weekdayShort;
-                return (
+        {/* Per-Movie Multi-Day Date Selector */}
+        {selectedMovieDates.length > 0 && (() => {
+          const allOrder = selectedMovieDates.map((d) => d.day.dateIso);
+          const availableFilmDates = selectedMovieDates
+            .filter((d) => d.sessionCount > 0)
+            .map((d) => d.day.dateIso);
+
+          const sortFilmDates = (list: string[]) =>
+            Array.from(new Set(list)).sort((a, b) => {
+              const ia = allOrder.indexOf(a);
+              const ib = allOrder.indexOf(b);
+              return ia !== -1 && ib !== -1 ? ia - ib : a.localeCompare(b);
+            });
+
+          const handleDetailDateClick = (
+            dIso: string,
+            e: React.MouseEvent<HTMLButtonElement>
+          ) => {
+            if (e.shiftKey && effectiveSelectedDates.length > 0) {
+              const i1 = allOrder.indexOf(effectiveSelectedDates[0]);
+              const i2 = allOrder.indexOf(dIso);
+              if (i1 !== -1 && i2 !== -1) {
+                const [s, end] = i1 <= i2 ? [i1, i2] : [i2, i1];
+                const range = allOrder.slice(s, end + 1);
+                setDetailMultiDateMode(range.length > 1);
+                onSelectDates(range);
+                return;
+              }
+            }
+            if (isDetailMultiActive || e.metaKey || e.ctrlKey) {
+              if (selectedDateSet.has(dIso)) {
+                if (effectiveSelectedDates.length <= 1) return;
+                onSelectDates(effectiveSelectedDates.filter((d) => d !== dIso));
+              } else {
+                setDetailMultiDateMode(true);
+                onSelectDates(sortFilmDates([...effectiveSelectedDates, dIso]));
+              }
+              return;
+            }
+            onSelectDate(dIso);
+          };
+
+          return (
+            <div
+              className="gallery-movie-dates"
+              role="group"
+              aria-label={lang === 'zh' ? '选择观影日期' : 'Choose screening dates for this movie'}
+            >
+              <div className="gallery-movie-dates__head">
+                <span className="gallery-movie-dates__label">
+                  <Calendar size={13} aria-hidden="true" />
+                  <span>{lang === 'zh' ? '该片排片日期' : 'Dates Screening This Film'}</span>
+                </span>
+
+                <div className="date-multi-bar">
                   <button
-                    key={day.dateIso}
                     type="button"
-                    role="tab"
-                    id={`gallery-movie-date-${day.dateIso}`}
-                    aria-selected={isSelected}
-                    className={`gallery-date-pill ${
-                      isSelected ? 'gallery-date-pill--active' : ''
-                    } ${sessionCount === 0 ? 'gallery-date-pill--empty' : ''}`}
-                    onClick={() => onSelectDate(day.dateIso)}
+                    id="gallery-detail-multi-date-btn"
+                    className={`date-multi-pill ${
+                      isDetailMultiActive ? 'date-multi-pill--active' : ''
+                    }`}
+                    aria-pressed={isDetailMultiActive}
+                    onClick={() => {
+                      if (isDetailMultiActive) {
+                        setDetailMultiDateMode(false);
+                        if (effectiveSelectedDates.length > 1) {
+                          onSelectDates([effectiveSelectedDates[0]]);
+                        }
+                      } else {
+                        setDetailMultiDateMode(true);
+                      }
+                    }}
                   >
-                    <span className="gallery-date-pill__top">
-                      <span>{dayHead}</span>
-                      {day.isCheapTuesday && (
-                        <em className="gallery-date-pill__deal">
-                          {lang === 'zh' ? '特惠' : 'Deal'}
-                        </em>
-                      )}
-                    </span>
-                    <span className="gallery-date-pill__date">
-                      {parts.dayMonthShort}
-                    </span>
-                    <span className="gallery-date-pill__count">
-                      {sessionCount > 0
+                    <Calendar size={11} aria-hidden="true" />
+                    <span>
+                      {isDetailMultiActive
                         ? lang === 'zh'
-                          ? `${cinemaCount}家 · ${sessionCount}场`
-                          : `${cinemaCount}v · ${sessionCount}x`
+                          ? `多日选择 (${effectiveSelectedDates.length}天)`
+                          : `Multi-Day (${effectiveSelectedDates.length})`
                         : lang === 'zh'
-                          ? '无场次'
-                          : 'None'}
+                          ? '+ 多日选择'
+                          : '+ Multi-Day'}
                     </span>
                   </button>
-                );
-              })}
+
+                  {availableFilmDates.length > 1 && (
+                    <button
+                      type="button"
+                      id="gallery-detail-all-days-btn"
+                      className={`date-preset-pill ${
+                        availableFilmDates.length === effectiveSelectedDates.length &&
+                        availableFilmDates.every((d) => selectedDateSet.has(d))
+                          ? 'date-preset-pill--active'
+                          : ''
+                      }`}
+                      onClick={() => {
+                        setDetailMultiDateMode(true);
+                        onSelectDates(availableFilmDates);
+                      }}
+                    >
+                      {lang === 'zh'
+                        ? `全部有场次日 (${availableFilmDates.length})`
+                        : `All Screening Days (${availableFilmDates.length})`}
+                    </button>
+                  )}
+
+                  {effectiveSelectedDates.length > 1 && (
+                    <button
+                      type="button"
+                      className="date-preset-pill date-preset-pill--clear"
+                      onClick={() => {
+                        setDetailMultiDateMode(false);
+                        onSelectDates([effectiveSelectedDates[0]]);
+                      }}
+                    >
+                      <X size={10} aria-hidden="true" />
+                      <span>{lang === 'zh' ? '恢复单日' : 'Single Day'}</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <div className="gallery-movie-dates__strip">
+                {selectedMovieDates.map(({ day, sessionCount, cinemaCount }) => {
+                  const parts = formatCalendarChipParts(day.dateIso, cityMeta.timeZone, lang);
+                  const isSelected = selectedDateSet.has(day.dateIso);
+                  const dayHead = day.isToday
+                    ? lang === 'zh'
+                      ? '今天'
+                      : 'Today'
+                    : day.isTomorrow
+                      ? lang === 'zh'
+                        ? '明天'
+                        : 'Tomorrow'
+                      : parts.weekdayShort;
+                  return (
+                    <button
+                      key={day.dateIso}
+                      type="button"
+                      id={`gallery-movie-date-${day.dateIso}`}
+                      aria-pressed={isSelected}
+                      className={`gallery-date-pill ${
+                        isSelected ? 'gallery-date-pill--active' : ''
+                      } ${sessionCount === 0 ? 'gallery-date-pill--empty' : ''}`}
+                      onClick={(e) => handleDetailDateClick(day.dateIso, e)}
+                    >
+                      <span className="gallery-date-pill__top">
+                        <span>{dayHead}</span>
+                        {isDetailMultiActive ? (
+                          <span
+                            className={`date-chip__check ${
+                              isSelected ? 'date-chip__check--on' : ''
+                            }`}
+                            aria-hidden="true"
+                          >
+                            {isSelected ? <Check size={9} /> : '+'}
+                          </span>
+                        ) : (
+                          day.isCheapTuesday && (
+                            <em className="gallery-date-pill__deal">
+                              {lang === 'zh' ? '特惠' : 'Deal'}
+                            </em>
+                          )
+                        )}
+                      </span>
+                      <span className="gallery-date-pill__date">{parts.dayMonthShort}</span>
+                      <span className="gallery-date-pill__count">
+                        {sessionCount > 0
+                          ? lang === 'zh'
+                            ? `${cinemaCount}家 · ${sessionCount}场`
+                            : `${cinemaCount}v · ${sessionCount}x`
+                          : lang === 'zh'
+                            ? '无场次'
+                            : 'None'}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
 
         {/* Venues Toolbar: Count + Format Quick-Chips + Sort */}
         <div className="gallery-venues-toolbar">
@@ -444,7 +575,18 @@ export function MovieGalleryView({
                   }`}
             </h3>
             <span className="gallery-venues-toolbar__date">
-              {displayCityName} · {activeDateParts.fullLabel}
+              {displayCityName} ·{' '}
+              {effectiveSelectedDates.length === 1
+                ? activeDateParts.fullLabel
+                : lang === 'zh'
+                  ? `已选 ${effectiveSelectedDates.length} 天 (${effectiveSelectedDates
+                      .slice(0, 3)
+                      .map((d) => formatCalendarChipParts(d, cityMeta.timeZone, lang).dayMonthShort)
+                      .join('、')}${effectiveSelectedDates.length > 3 ? ' 等' : ''})`
+                  : `${effectiveSelectedDates.length} days (${effectiveSelectedDates
+                      .slice(0, 3)
+                      .map((d) => formatCalendarChipParts(d, cityMeta.timeZone, lang).dayMonthShort)
+                      .join(', ')}${effectiveSelectedDates.length > 3 ? '…' : ''})`}
             </span>
           </div>
 
@@ -710,23 +852,16 @@ export function MovieGalleryView({
                     </div>
                   </div>
 
-                  <div
-                    className="session-pills-wrap"
-                    role="list"
-                    aria-label={`${cinema.name} showtimes`}
-                  >
-                    {sessions.map((session) => (
-                      <div key={session.id} role="listitem">
-                        <SessionPill
-                          session={session}
-                          lang={lang}
-                          isShortlisted={shortlistedIds.has(session.id)}
-                          onSelectSession={onSelectSession}
-                          onToggleShortlist={onToggleShortlist}
-                        />
-                      </div>
-                    ))}
-                  </div>
+                  <SessionListByDate
+                    sessions={sessions}
+                    timeZone={cityMeta.timeZone}
+                    lang={lang}
+                    showDateGroups={effectiveSelectedDates.length > 1}
+                    shortlistedIds={shortlistedIds}
+                    onSelectSession={onSelectSession}
+                    onToggleShortlist={onToggleShortlist}
+                    ariaLabel={`${cinema.name} showtimes`}
+                  />
                 </div>
               );
             })}

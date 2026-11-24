@@ -194,6 +194,7 @@ export interface FilterState {
   releaseStatus: ReleaseStatus;
   browseMode: BrowseMode;
   dateIso: string;
+  selectedDates: string[];
   selectedMovieId: string; // 'all' or specific Movie.id
   selectedCinemaId: string; // 'all' or specific Cinema.id
   chain: string; // 'all' or specific cinema chain

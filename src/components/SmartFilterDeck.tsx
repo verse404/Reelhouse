@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import {
   Building2,
+  Calendar,
   Check,
   Clock,
   Film,
@@ -143,10 +144,90 @@ export function SmartFilterDeck({
   onResetFilters,
 }: SmartFilterDeckProps) {
   const [copiedLink, setCopiedLink] = useState(false);
+  const [multiDayMode, setMultiDayMode] = useState(false);
   const t = getUiText(lang);
   const displayCityName = t.cityNames[cityMeta.id] ?? cityMeta.name;
   const isComingSoon = filters.releaseStatus === 'coming_soon';
   const isShanghai = cityMeta.id === 'shanghai';
+
+  const selectedDates =
+    filters.selectedDates && filters.selectedDates.length > 0
+      ? filters.selectedDates
+      : [filters.dateIso];
+  const selectedDateSet = new Set(selectedDates);
+  const isMultiActive = multiDayMode || selectedDates.length > 1;
+  const calendarOrder = calendarDays.map((d) => d.dateIso);
+
+  const sortDatesInOrder = (dates: string[]) =>
+    Array.from(new Set(dates)).sort((a, b) => {
+      const ia = calendarOrder.indexOf(a);
+      const ib = calendarOrder.indexOf(b);
+      if (ia !== -1 && ib !== -1) return ia - ib;
+      return a.localeCompare(b);
+    });
+
+  const handleDateChipClick = (
+    dateIso: string,
+    event: React.MouseEvent<HTMLButtonElement>
+  ) => {
+    if (event.shiftKey && selectedDates.length > 0) {
+      const anchor = selectedDates[0];
+      const i1 = calendarOrder.indexOf(anchor);
+      const i2 = calendarOrder.indexOf(dateIso);
+      if (i1 !== -1 && i2 !== -1) {
+        const [start, end] = i1 <= i2 ? [i1, i2] : [i2, i1];
+        const range = calendarOrder.slice(start, end + 1);
+        setMultiDayMode(range.length > 1);
+        onUpdateFilters({ dateIso: range[0], selectedDates: range });
+        return;
+      }
+    }
+
+    if (isMultiActive || event.metaKey || event.ctrlKey) {
+      if (selectedDateSet.has(dateIso)) {
+        if (selectedDates.length <= 1) return; // Always keep at least 1 day selected
+        const next = selectedDates.filter((d) => d !== dateIso);
+        onUpdateFilters({ dateIso: next[0], selectedDates: next });
+      } else {
+        const next = sortDatesInOrder([...selectedDates, dateIso]);
+        setMultiDayMode(true);
+        onUpdateFilters({ dateIso: next[0], selectedDates: next });
+      }
+      return;
+    }
+
+    onUpdateFilters({ dateIso, selectedDates: [dateIso] });
+  };
+
+  const handleToggleMultiDayMode = () => {
+    if (isMultiActive) {
+      setMultiDayMode(false);
+      if (selectedDates.length > 1) {
+        onUpdateFilters({ dateIso: selectedDates[0], selectedDates: [selectedDates[0]] });
+      }
+    } else {
+      setMultiDayMode(true);
+    }
+  };
+
+  const upcomingWeekendDates = calendarDays
+    .slice(0, 7)
+    .filter((d) => d.dayOfWeekIndex === 6 || d.dayOfWeekIndex === 0)
+    .map((d) => d.dateIso);
+  const next3Dates = calendarDays.slice(0, 3).map((d) => d.dateIso);
+  const next7Dates = calendarDays.slice(0, 7).map((d) => d.dateIso);
+
+  const isExactPreset = (preset: string[]) =>
+    preset.length > 0 &&
+    preset.length === selectedDates.length &&
+    preset.every((d) => selectedDateSet.has(d));
+
+  const applyDatePreset = (dates: string[]) => {
+    if (dates.length === 0) return;
+    const sorted = sortDatesInOrder(dates);
+    setMultiDayMode(sorted.length > 1);
+    onUpdateFilters({ dateIso: sorted[0], selectedDates: sorted });
+  };
   const priceOptions: Array<{ value: PriceCapOption; label: string }> = isShanghai
     ? [
         { value: 'all', label: lang === 'zh' ? '不限票价' : 'Any Price' },
@@ -235,51 +316,154 @@ export function SmartFilterDeck({
         }`}
       >
         {!isComingSoon && (
-          <div className="date-strip" role="tablist" aria-label="Screening date">
-            {calendarDays.map((day) => {
-              const parts = formatCalendarChipParts(day.dateIso, cityMeta.timeZone, lang);
-              const isSelected = filters.dateIso === day.dateIso;
-              const topTag = day.isToday
-                ? lang === 'zh'
-                  ? '今天'
-                  : 'Today'
-                : day.isTomorrow
-                  ? lang === 'zh'
-                    ? '明天'
-                    : 'Tomorrow'
-                  : parts.weekdayShort;
+          <div className="date-strip-col">
+            <div className="date-multi-bar" role="group" aria-label={lang === 'zh' ? '多日选择与快捷日期' : 'Multi-day date selection'}>
+              <button
+                type="button"
+                id="date-multi-mode-btn"
+                className={`date-multi-pill ${isMultiActive ? 'date-multi-pill--active' : ''}`}
+                aria-pressed={isMultiActive}
+                onClick={handleToggleMultiDayMode}
+                title={
+                  lang === 'zh'
+                    ? '开启后可同时点选多个日期合并查看场次（也支持 Ctrl/Cmd 或 Shift 连选）'
+                    : 'Toggle to select multiple dates at once (or hold Ctrl/Cmd / Shift while clicking)'
+                }
+              >
+                <Calendar size={11} aria-hidden="true" />
+                <span>
+                  {isMultiActive
+                    ? lang === 'zh'
+                      ? `多日选择 (${selectedDates.length}天)`
+                      : `Multi-Day (${selectedDates.length})`
+                    : lang === 'zh'
+                      ? '+ 多日选择'
+                      : '+ Multi-Day'}
+                </span>
+              </button>
 
-              return (
+              {upcomingWeekendDates.length > 1 && (
                 <button
-                  key={day.dateIso}
                   type="button"
-                  role="tab"
-                  id={`date-tab-${day.dateIso}`}
-                  aria-selected={isSelected}
-                  className={`date-chip ${isSelected ? 'date-chip--active' : ''} ${
-                    day.isCheapTuesday ? 'date-chip--tuesday' : ''
+                  id="date-preset-weekend"
+                  className={`date-preset-pill ${
+                    isExactPreset(upcomingWeekendDates) ? 'date-preset-pill--active' : ''
                   }`}
-                  onClick={() => onUpdateFilters({ dateIso: day.dateIso })}
+                  onClick={() => applyDatePreset(upcomingWeekendDates)}
                 >
-                  <span className="date-chip__weekday">{topTag}</span>
-                  <span className="date-chip__day">{parts.dayMonthShort}</span>
-                  {!isShanghai && day.dayOfWeekIndex === 1 && (
-                    <span className="date-chip__deal-tag">
-                      {lang === 'zh' ? '周一特惠' : 'Discount Mon'}
-                    </span>
-                  )}
-                  {day.isCheapTuesday && (
-                    <span className="date-chip__deal-tag">
-                      {lang === 'zh'
-                        ? '周二半价'
-                        : isShanghai
-                          ? '周二半价 Tue'
-                          : 'Cheap Tue'}
-                    </span>
-                  )}
+                  {lang === 'zh' ? '本周末' : 'Weekend'}
                 </button>
-              );
-            })}
+              )}
+
+              {next3Dates.length > 1 && (
+                <button
+                  type="button"
+                  id="date-preset-next3"
+                  className={`date-preset-pill ${
+                    isExactPreset(next3Dates) ? 'date-preset-pill--active' : ''
+                  }`}
+                  onClick={() => applyDatePreset(next3Dates)}
+                >
+                  {lang === 'zh' ? '未来3天' : 'Next 3 Days'}
+                </button>
+              )}
+
+              {next7Dates.length > 3 && (
+                <button
+                  type="button"
+                  id="date-preset-next7"
+                  className={`date-preset-pill ${
+                    isExactPreset(next7Dates) ? 'date-preset-pill--active' : ''
+                  }`}
+                  onClick={() => applyDatePreset(next7Dates)}
+                >
+                  {lang === 'zh' ? '未来7天' : 'All 7 Days'}
+                </button>
+              )}
+
+              {selectedDates.length > 1 && (
+                <button
+                  type="button"
+                  id="date-preset-single-reset"
+                  className="date-preset-pill date-preset-pill--clear"
+                  onClick={() => {
+                    setMultiDayMode(false);
+                    onUpdateFilters({
+                      dateIso: selectedDates[0],
+                      selectedDates: [selectedDates[0]],
+                    });
+                  }}
+                >
+                  <X size={10} aria-hidden="true" />
+                  <span>{lang === 'zh' ? '恢复单日' : 'Single Day'}</span>
+                </button>
+              )}
+            </div>
+
+            <div className="date-strip" role="group" aria-label="Screening dates">
+              {calendarDays.map((day) => {
+                const parts = formatCalendarChipParts(day.dateIso, cityMeta.timeZone, lang);
+                const isSelected = selectedDateSet.has(day.dateIso);
+                const topTag = day.isToday
+                  ? lang === 'zh'
+                    ? '今天'
+                    : 'Today'
+                  : day.isTomorrow
+                    ? lang === 'zh'
+                      ? '明天'
+                      : 'Tomorrow'
+                    : parts.weekdayShort;
+
+                return (
+                  <button
+                    key={day.dateIso}
+                    type="button"
+                    id={`date-tab-${day.dateIso}`}
+                    aria-pressed={isSelected}
+                    className={`date-chip ${isSelected ? 'date-chip--active' : ''} ${
+                      day.isCheapTuesday ? 'date-chip--tuesday' : ''
+                    } ${isMultiActive ? 'date-chip--multi' : ''}`}
+                    onClick={(e) => handleDateChipClick(day.dateIso, e)}
+                    title={
+                      isMultiActive
+                        ? lang === 'zh'
+                          ? '点击勾选或取消该日期'
+                          : 'Click to toggle this date in your selection'
+                        : lang === 'zh'
+                          ? '点击切换日期 · 按住 Ctrl/Cmd 可多选'
+                          : 'Click to view this date · Ctrl/Cmd+Click to add multiple days'
+                    }
+                  >
+                    {isMultiActive && (
+                      <span
+                        className={`date-chip__check ${
+                          isSelected ? 'date-chip__check--on' : ''
+                        }`}
+                        aria-hidden="true"
+                      >
+                        {isSelected ? <Check size={9} /> : '+'}
+                      </span>
+                    )}
+                    <span className="date-chip__weekday">{topTag}</span>
+                    <span className="date-chip__day">{parts.dayMonthShort}</span>
+                    {!isShanghai && day.dayOfWeekIndex === 1 && (
+                      <span className="date-chip__deal-tag">
+                        {lang === 'zh' ? '周一特惠' : 'Discount Mon'}
+                      </span>
+                    )}
+                    {day.isCheapTuesday && (
+                      <span className="date-chip__deal-tag">
+                        {lang === 'zh'
+                          ? '周二半价'
+                          : isShanghai
+                            ? '周二半价 Tue'
+                            : 'Cheap Tue'}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
           </div>
         )}
 

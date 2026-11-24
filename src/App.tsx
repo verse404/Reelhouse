@@ -118,16 +118,19 @@ export function App() {
       saveCityPreference(resolvedCity);
     }
     const baseCalendar = cinemaDataService.getCalendarDays(resolvedCity);
-    const validDate =
-      urlPatch.dateIso && baseCalendar.some((d) => d.dateIso === urlPatch.dateIso)
-        ? urlPatch.dateIso
-        : baseCalendar[0]?.dateIso ?? '2026-11-14';
+    const validCalendarSet = new Set(baseCalendar.map((d) => d.dateIso));
+    const urlDates = (urlPatch.selectedDates ?? (urlPatch.dateIso ? [urlPatch.dateIso] : [])).filter(
+      (d) => validCalendarSet.has(d)
+    );
+    const fallbackDate = baseCalendar[0]?.dateIso ?? '2026-11-14';
+    const validDates = urlDates.length > 0 ? urlDates : [fallbackDate];
 
     return {
       city: resolvedCity,
       releaseStatus: urlPatch.releaseStatus ?? 'in_cinemas',
       browseMode: urlPatch.browseMode ?? 'gallery',
-      dateIso: validDate,
+      dateIso: validDates[0],
+      selectedDates: validDates,
       selectedMovieId: urlPatch.selectedMovieId ?? 'all',
       selectedCinemaId: urlPatch.selectedCinemaId ?? 'all',
       chain: urlPatch.chain ?? 'all',
@@ -246,8 +249,17 @@ export function App() {
     [filters.city]
   );
   const todayDateIso = calendarDays[0]?.dateIso ?? '';
+  const selectedDateSet = useMemo(
+    () =>
+      new Set(
+        filters.selectedDates && filters.selectedDates.length > 0
+          ? filters.selectedDates
+          : [filters.dateIso]
+      ),
+    [filters.selectedDates, filters.dateIso]
+  );
   const isTodaySelected =
-    filters.releaseStatus === 'in_cinemas' && filters.dateIso === todayDateIso;
+    filters.releaseStatus === 'in_cinemas' && selectedDateSet.has(todayDateIso);
   const localNowMinutes = useMemo(() => {
     void clockTick;
     return getLocalCurrentMinutesFromMidnight(cityMeta.timeZone);
@@ -370,7 +382,10 @@ export function App() {
     if (place.city !== filters.city) {
       saveCityPreference(place.city);
       const nextCalendar = cinemaDataService.getCalendarDays(place.city);
-      const sameDateExists = nextCalendar.some((d) => d.dateIso === filters.dateIso);
+      const nextValidSet = new Set(nextCalendar.map((d) => d.dateIso));
+      const keptDates = filters.selectedDates.filter((d) => nextValidSet.has(d));
+      const nextDates =
+        keptDates.length > 0 ? keptDates : [nextCalendar[0]?.dateIso ?? filters.dateIso];
       setFilters((prev) => ({
         ...prev,
         city: place.city,
@@ -379,7 +394,8 @@ export function App() {
         chain: 'all',
         suburb: 'all',
         nearHubId: sourceId,
-        dateIso: sameDateExists ? prev.dateIso : nextCalendar[0]?.dateIso ?? prev.dateIso,
+        dateIso: nextDates[0],
+        selectedDates: nextDates,
       }));
     } else {
       setFilters((prev) => ({ ...prev, nearHubId: sourceId }));
@@ -477,11 +493,13 @@ export function App() {
 
   const handleResetHome = () => {
     const freshCal = cinemaDataService.getCalendarDays(filters.city);
+    const firstDate = freshCal[0]?.dateIso ?? filters.dateIso;
     setFilters((prev) => ({
       ...prev,
       releaseStatus: 'in_cinemas',
       browseMode: 'gallery',
-      dateIso: freshCal[0]?.dateIso ?? prev.dateIso,
+      dateIso: firstDate,
+      selectedDates: [firstDate],
       selectedMovieId: 'all',
       selectedCinemaId: 'all',
       chain: 'all',
@@ -561,7 +579,10 @@ export function App() {
     const nextCalendar = cinemaDataService.getCalendarDays(nextCity);
     const nextCinemas = cinemaDataService.getCinemas(nextCity);
     const nextCitySessions = cinemaDataService.getSessionsForCity(nextCity);
-    const sameDateExists = nextCalendar.some((d) => d.dateIso === filters.dateIso);
+    const nextCalSet = new Set(nextCalendar.map((d) => d.dateIso));
+    const keptDates = filters.selectedDates.filter((d) => nextCalSet.has(d));
+    const nextDates =
+      keptDates.length > 0 ? keptDates : [nextCalendar[0]?.dateIso ?? filters.dateIso];
     const sameChainExists = nextCinemas.some((c) => c.chain === filters.chain);
     const sameMovieExists =
       filters.selectedMovieId === 'all' ||
@@ -575,7 +596,8 @@ export function App() {
       chain: sameChainExists ? prev.chain : 'all',
       suburb: 'all',
       nearHubId: 'cbd',
-      dateIso: sameDateExists ? prev.dateIso : nextCalendar[0]?.dateIso ?? prev.dateIso,
+      dateIso: nextDates[0],
+      selectedDates: nextDates,
     }));
   };
 
@@ -623,6 +645,18 @@ export function App() {
   const handleUpdateFilters = (patch: Partial<FilterState>) => {
     setFilters((prev) => {
       const next = { ...prev, ...patch };
+      if (patch.selectedDates && patch.selectedDates.length > 0) {
+        const calOrder = calendarDays.map((d) => d.dateIso);
+        const deduped = Array.from(new Set(patch.selectedDates)).sort((a, b) => {
+          const ia = calOrder.indexOf(a);
+          const ib = calOrder.indexOf(b);
+          return ia !== -1 && ib !== -1 ? ia - ib : a.localeCompare(b);
+        });
+        next.selectedDates = deduped;
+        next.dateIso = deduped[0];
+      } else if (patch.dateIso) {
+        next.selectedDates = [patch.dateIso];
+      }
       // If user explicitly picks a specific cinema from the dropdown, relax incompatible chain/suburb/vibe filters
       if (patch.selectedCinemaId && patch.selectedCinemaId !== 'all') {
         const pickedCinema = allCinemasMap.get(patch.selectedCinemaId);
@@ -636,8 +670,8 @@ export function App() {
         }
       }
 
-      // If user picks a specific Film or Cinema that has 0 sessions on the active day,
-      // auto-jump to the earliest day in the 7-day strip where it IS screening!
+      // If user picks a specific Film or Cinema that has 0 sessions on all active dates,
+      // auto-jump to the earliest day in the calendar strip where it IS screening!
       if (
         next.releaseStatus === 'in_cinemas' &&
         ((patch.selectedMovieId && patch.selectedMovieId !== 'all') ||
@@ -650,15 +684,17 @@ export function App() {
             next.showPastToday ||
             s.startMinutesFromMidnight + 15 >= localNowMinutes);
 
-        const hasOnCurrentDate = citySessionsAllDays.some(
-          (s) => s.dateIso === next.dateIso && matchesSelection(s, next.dateIso)
+        const activeSet = new Set(next.selectedDates);
+        const hasOnCurrentDates = citySessionsAllDays.some(
+          (s) => activeSet.has(s.dateIso) && matchesSelection(s, s.dateIso)
         );
-        if (!hasOnCurrentDate) {
+        if (!hasOnCurrentDates) {
           const nextAvailableDay = calendarDays.find((d) =>
             citySessionsAllDays.some((s) => s.dateIso === d.dateIso && matchesSelection(s, d.dateIso))
           );
           if (nextAvailableDay) {
             next.dateIso = nextAvailableDay.dateIso;
+            next.selectedDates = [nextAvailableDay.dateIso];
           }
         }
       }
@@ -712,20 +748,26 @@ export function App() {
     setFilters((prev) => ({
       ...prev,
       dateIso: cheapTuesdayDay.dateIso,
+      selectedDates: [cheapTuesdayDay.dateIso],
       dealsOnly: true,
     }));
   };
 
   const spotlightDaySessions = useMemo(() => {
     void catalogRevision;
-    const raw = cinemaDataService.getSessionsForCityAndDate(filters.city, filters.dateIso);
+    const raw = filters.selectedDates.flatMap((dIso) =>
+      cinemaDataService.getSessionsForCityAndDate(filters.city, dIso)
+    );
     if (!isTodaySelected || filters.showPastToday) return raw;
-    return raw.filter((s) => s.startMinutesFromMidnight + 15 >= localNowMinutes);
+    return raw.filter(
+      (s) => s.dateIso !== todayDateIso || s.startMinutesFromMidnight + 15 >= localNowMinutes
+    );
   }, [
     filters.city,
-    filters.dateIso,
+    filters.selectedDates,
     filters.showPastToday,
     isTodaySelected,
+    todayDateIso,
     localNowMinutes,
     catalogRevision,
   ]);
@@ -733,10 +775,13 @@ export function App() {
   // Core filtering pipeline across sessions, movies, and cinemas
   const { filteredSessions, hiddenPastTodayCount } = useMemo(() => {
     void catalogRevision;
-    const daySessions = cinemaDataService.getSessionsForCityAndDate(
-      filters.city,
-      filters.dateIso
-    );
+    const daySessions = filters.selectedDates
+      .flatMap((dIso) => cinemaDataService.getSessionsForCityAndDate(filters.city, dIso))
+      .sort(
+        (a, b) =>
+          a.dateIso.localeCompare(b.dateIso) ||
+          a.startMinutesFromMidnight - b.startMinutesFromMidnight
+      );
     const query = filters.searchQuery.trim().toLowerCase();
 
     const baseMatched = daySessions.filter((session) => {
@@ -791,7 +836,7 @@ export function App() {
         return false;
       }
       if (filters.dealsOnly && !session.isDealSession) return false;
-      if (isTodaySelected && filters.makeItOnly) {
+      if (session.dateIso === todayDateIso && filters.makeItOnly) {
         const distKm = getCinemaDistanceInfo(cinema, userOrigin).km;
         const reach = evaluateSessionReachability(
           distKm,
@@ -830,14 +875,12 @@ export function App() {
 
     // Auto-hide sessions on Today that started more than 15 minutes ago (trailer grace window)
     const isPastGraceWindow = (s: ScreeningSession) =>
-      s.startMinutesFromMidnight + 15 < localNowMinutes;
+      s.dateIso === todayDateIso && s.startMinutesFromMidnight + 15 < localNowMinutes;
     const pastCount = baseMatched.filter(isPastGraceWindow).length;
 
     if (filters.showPastToday || filters.makeItOnly) {
       return {
-        filteredSessions: filters.makeItOnly
-          ? baseMatched
-          : baseMatched,
+        filteredSessions: baseMatched,
         hiddenPastTodayCount: filters.makeItOnly ? 0 : pastCount,
       };
     }
@@ -854,6 +897,7 @@ export function App() {
     userOrigin,
     catalogRevision,
     isTodaySelected,
+    todayDateIso,
     localNowMinutes,
   ]);
 
@@ -1044,8 +1088,8 @@ export function App() {
         session.startMinutesFromMidnight + 15 < localNowMinutes;
       if (isPastToday) continue;
 
-      const isSelectedDay = session.dateIso === filters.dateIso;
-      if (isSelectedDay && isTodaySelected && filters.makeItOnly) {
+      const isSelectedDay = selectedDateSet.has(session.dateIso);
+      if (isSelectedDay && session.dateIso === todayDateIso && filters.makeItOnly) {
         const distKm = getCinemaDistanceInfo(cinema, userOrigin).km;
         const reach = evaluateSessionReachability(
           distKm,
@@ -1119,7 +1163,7 @@ export function App() {
     favoriteCinemaIds,
     todayDateIso,
     localNowMinutes,
-    isTodaySelected,
+    selectedDateSet,
     userOrigin,
     cityMeta.currency,
     calendarDays,
@@ -1551,6 +1595,7 @@ export function App() {
             selectedMovieItem={selectedGalleryMovieItem}
             selectedMovieDates={selectedGalleryMovieDates}
             activeDateIso={filters.dateIso}
+            selectedDates={filters.selectedDates}
             cityMeta={cityMeta}
             lang={lang}
             userOrigin={userOrigin}
@@ -1562,6 +1607,7 @@ export function App() {
             onPickMovie={handlePickGalleryMovie}
             onBackToAllMovies={handleBackToAllMovies}
             onSelectDate={(dateIso) => handleUpdateFilters({ dateIso })}
+            onSelectDates={(selectedDates) => handleUpdateFilters({ selectedDates })}
             onSwitchToFullSchedule={() => handleChangeBrowseMode('movies')}
             onSelectSession={setSelectedSession}
             onToggleShortlist={handleToggleShortlist}
@@ -1576,6 +1622,8 @@ export function App() {
           <MovieBrowseView
             items={movieBrowseItems}
             isShanghai={filters.city === 'shanghai'}
+            timeZone={cityMeta.timeZone}
+            isMultiDay={filters.selectedDates.length > 1}
             lang={lang}
             userOrigin={userOrigin}
             shortlistedIds={shortlistedIds}
@@ -1595,6 +1643,7 @@ export function App() {
         ) : filters.browseMode === 'map' ? (
           <CinemaMapView
             cityMeta={cityMeta}
+            isMultiDay={filters.selectedDates.length > 1}
             lang={lang}
             edition={edition}
             allCityCinemas={cityCinemas}
@@ -1616,6 +1665,8 @@ export function App() {
           <CinemaBrowseView
             items={cinemaBrowseItems}
             isShanghai={filters.city === 'shanghai'}
+            timeZone={cityMeta.timeZone}
+            isMultiDay={filters.selectedDates.length > 1}
             lang={lang}
             userOrigin={userOrigin}
             shortlistedIds={shortlistedIds}

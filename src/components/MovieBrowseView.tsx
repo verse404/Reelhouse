@@ -11,7 +11,14 @@ import {
   Tag,
   Train,
 } from 'lucide-react';
-import type { AppLanguage, Cinema, FormatType, Movie, ScreeningSession } from '../types/cinema';
+import type {
+  AppLanguage,
+  Cinema,
+  CityTimeZone,
+  FormatType,
+  Movie,
+  ScreeningSession,
+} from '../types/cinema';
 import { formatDistanceKm, formatRuntime, formatSessionPrice } from '../utils/formatters';
 import {
   getDisplayCinemaName,
@@ -27,7 +34,7 @@ import {
 } from '../utils/security';
 import { MoviePoster } from './MoviePoster';
 import { RatingsPillBar } from './RatingsPillBar';
-import { SessionPill } from './SessionPill';
+import { SessionListByDate } from './SessionListByDate';
 
 export interface MovieWithVenueSessions {
   movie: Movie;
@@ -41,6 +48,8 @@ export interface MovieWithVenueSessions {
 interface MovieBrowseViewProps {
   items: MovieWithVenueSessions[];
   isShanghai?: boolean;
+  timeZone?: CityTimeZone;
+  isMultiDay?: boolean;
   lang?: AppLanguage;
   userOrigin: UserLocationOrigin;
   shortlistedIds: Set<string>;
@@ -85,6 +94,8 @@ function scrollToVenueRow(movieId: string, cinemaId: string) {
 export function MovieBrowseView({
   items,
   isShanghai = false,
+  timeZone,
+  isMultiDay = false,
   lang = 'en',
   userOrigin,
   shortlistedIds,
@@ -470,18 +481,15 @@ export function MovieBrowseView({
                           </div>
                         </div>
 
-                        <div className="session-pills-wrap">
-                          {sessions.map((session) => (
-                            <SessionPill
-                              key={session.id}
-                              session={session}
-                              lang={lang}
-                              isShortlisted={shortlistedIds.has(session.id)}
-                              onSelectSession={onSelectSession}
-                              onToggleShortlist={onToggleShortlist}
-                            />
-                          ))}
-                        </div>
+                        <SessionListByDate
+                          sessions={sessions}
+                          timeZone={timeZone ?? (isShanghai ? 'Asia/Shanghai' : 'Australia/Melbourne')}
+                          lang={lang}
+                          showDateGroups={isMultiDay}
+                          shortlistedIds={shortlistedIds}
+                          onSelectSession={onSelectSession}
+                          onToggleShortlist={onToggleShortlist}
+                        />
                       </div>
                     );
                   })}
