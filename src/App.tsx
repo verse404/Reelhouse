@@ -51,6 +51,11 @@ import {
   type MovieWithVenueSessions,
 } from './components/MovieBrowseView';
 import {
+  MovieGalleryView,
+  type GalleryMovieSummary,
+  type SelectedMovieDateSummary,
+} from './components/MovieGalleryView';
+import {
   CinemaBrowseView,
   type CinemaWithMovieSessions,
 } from './components/CinemaBrowseView';
@@ -121,7 +126,7 @@ export function App() {
     return {
       city: resolvedCity,
       releaseStatus: urlPatch.releaseStatus ?? 'in_cinemas',
-      browseMode: urlPatch.browseMode ?? 'movies',
+      browseMode: urlPatch.browseMode ?? 'gallery',
       dateIso: validDate,
       selectedMovieId: urlPatch.selectedMovieId ?? 'all',
       selectedCinemaId: urlPatch.selectedCinemaId ?? 'all',
@@ -475,7 +480,7 @@ export function App() {
     setFilters((prev) => ({
       ...prev,
       releaseStatus: 'in_cinemas',
-      browseMode: 'movies',
+      browseMode: 'gallery',
       dateIso: freshCal[0]?.dateIso ?? prev.dateIso,
       selectedMovieId: 'all',
       selectedCinemaId: 'all',
@@ -499,10 +504,40 @@ export function App() {
   };
 
   const handleFocusFeaturedMovie = (title: string) => {
+    const normalized = title.trim().toLowerCase();
+    const matched = allMovies.find((m) => m.title.trim().toLowerCase() === normalized);
+    if (matched) {
+      handleUpdateFilters({
+        releaseStatus: 'in_cinemas',
+        browseMode: 'gallery',
+        selectedMovieId: matched.id,
+        selectedCinemaId: 'all',
+        chain: 'all',
+        favoritesOnly: false,
+        suburb: 'all',
+        timeOfDay: 'all',
+        formats: [],
+        vibe: 'all',
+        genre: 'all',
+        priceCap: 'all',
+        minRating: 'all',
+        finishBy: 'all',
+        dealsOnly: false,
+        showPastToday: false,
+        searchQuery: '',
+      });
+      window.requestAnimationFrame(() => {
+        document.getElementById('movie-gallery-top')?.scrollIntoView({
+          behavior: 'smooth',
+          block: 'start',
+        });
+      });
+      return;
+    }
     setFilters((prev) => ({
       ...prev,
       releaseStatus: 'in_cinemas',
-      browseMode: 'movies',
+      browseMode: 'gallery',
       selectedMovieId: 'all',
       selectedCinemaId: 'all',
       chain: 'all',
@@ -548,8 +583,16 @@ export function App() {
     setFilters((prev) => ({
       ...prev,
       browseMode: mode,
-      // Map view displays live screening sessions; exit Coming Soon automatically if user clicks Map
-      releaseStatus: mode === 'map' && prev.releaseStatus === 'coming_soon' ? 'in_cinemas' : prev.releaseStatus,
+      // Clicking All Movies while viewing a picked movie returns to the All Movies wall
+      selectedMovieId:
+        mode === 'gallery' && prev.browseMode === 'gallery' && prev.selectedMovieId !== 'all'
+          ? 'all'
+          : prev.selectedMovieId,
+      // Gallery & Map views display currently screening films; exit Coming Soon automatically
+      releaseStatus:
+        (mode === 'map' || mode === 'gallery') && prev.releaseStatus === 'coming_soon'
+          ? 'in_cinemas'
+          : prev.releaseStatus,
     }));
   };
 
@@ -892,6 +935,316 @@ export function App() {
     return result;
   }, [filteredSessions, allCinemasMap, movieMap]);
 
+  // All movies currently showing across the 7-day window in this city (for Step 1 All Movies Gallery)
+  const galleryMovies = useMemo<GalleryMovieSummary[]>(() => {
+    const query = filters.searchQuery.trim().toLowerCase();
+    const lowCap = filters.city === 'shanghai' ? 50.0 : 18.0;
+    const midCap = filters.city === 'shanghai' ? 80.0 : 25.0;
+    const formatPriority: Record<FormatType, number> = {
+      '35mm / 70mm': 6,
+      IMAX: 5,
+      'Dolby Atmos': 4,
+      'Gold Class / LUX': 3,
+      'Vmax / Xtremescreen': 2,
+      Standard: 1,
+    };
+
+    const matchesSessionExclDateAndMovie = (
+      session: ScreeningSession,
+      cinema: Cinema,
+      movie: Movie
+    ): boolean => {
+      if (filters.selectedCinemaId !== 'all' && cinema.id !== filters.selectedCinemaId) {
+        return false;
+      }
+      if (filters.chain !== 'all' && cinema.chain !== filters.chain) return false;
+      if (filters.favoritesOnly && !favoriteCinemaIds.has(cinema.id)) return false;
+      if (filters.suburb !== 'all' && cinema.suburb !== filters.suburb) return false;
+      if (filters.vibe !== 'all' && cinema.vibe !== filters.vibe) return false;
+      if (filters.genre !== 'all' && !movie.genres.includes(filters.genre)) return false;
+      if (filters.formats.length > 0) {
+        const matchesFormat = filters.formats.some((fmt) => {
+          if (session.format === fmt) return true;
+          if (
+            fmt === '35mm / 70mm' &&
+            session.accessibilityTags.some((tag) => /35mm|70mm/i.test(tag))
+          ) {
+            return true;
+          }
+          return false;
+        });
+        if (!matchesFormat) return false;
+      }
+      if (!matchesTimeOfDay(session.startMinutesFromMidnight, filters.timeOfDay)) {
+        return false;
+      }
+      if (filters.priceCap === 'under18' && session.priceAud > lowCap) return false;
+      if (filters.priceCap === 'under25' && session.priceAud > midCap) return false;
+      if (filters.finishBy !== 'all') {
+        const hh = Number.parseInt(filters.finishBy.slice(0, 2), 10);
+        const mm = Number.parseInt(filters.finishBy.slice(2, 4), 10);
+        const cutoffMinutes = hh * 60 + mm;
+        const estFinish = session.startMinutesFromMidnight + movie.runtimeMinutes + 15;
+        if (estFinish > cutoffMinutes) return false;
+      }
+      if (filters.minRating === 'imdb8' && (movie.ratings.imdb.score ?? 0) < 8.0) return false;
+      if (
+        filters.minRating === 'rt90' &&
+        (movie.ratings.rottenTomatoes.tomatometerPercent ?? 0) < 90
+      ) {
+        return false;
+      }
+      if (filters.minRating === 'douban8' && (movie.ratings.douban.score ?? 0) < 8.0) return false;
+      if (filters.dealsOnly && !session.isDealSession) return false;
+
+      if (query.length > 0) {
+        const searchable = [
+          movie.title,
+          movie.ratings.douban.chineseTitle,
+          movie.director,
+          ...movie.castLead,
+          ...movie.genres,
+          ...session.accessibilityTags,
+          cinema.name,
+          cinema.chain,
+          cinema.suburb,
+          cinema.vibe,
+          session.format,
+        ]
+          .join(' ')
+          .toLowerCase();
+        if (!searchable.includes(query)) return false;
+      }
+      return true;
+    };
+
+    const byMovie = new Map<
+      string,
+      {
+        movie: Movie;
+        selectedVenues: Set<string>;
+        selectedSessions: number;
+        weekVenues: Set<string>;
+        weekSessions: number;
+        availableDates: Set<string>;
+        lowestSelectedPrice: number | null;
+        lowestWeekPrice: number | null;
+        currency: 'AUD' | 'CNY';
+        formats: Set<FormatType>;
+      }
+    >();
+
+    for (const session of citySessionsAllDays) {
+      const cinema = allCinemasMap.get(session.cinemaId);
+      const movie = movieMap.get(session.movieId);
+      if (!cinema || !movie) continue;
+      if (!matchesSessionExclDateAndMovie(session, cinema, movie)) continue;
+
+      const isPastToday =
+        session.dateIso === todayDateIso &&
+        !filters.showPastToday &&
+        session.startMinutesFromMidnight + 15 < localNowMinutes;
+      if (isPastToday) continue;
+
+      const isSelectedDay = session.dateIso === filters.dateIso;
+      if (isSelectedDay && isTodaySelected && filters.makeItOnly) {
+        const distKm = getCinemaDistanceInfo(cinema, userOrigin).km;
+        const reach = evaluateSessionReachability(
+          distKm,
+          filters.city,
+          session.startMinutesFromMidnight,
+          localNowMinutes
+        );
+        if (!reach.canMakeIt) continue;
+      }
+
+      let acc = byMovie.get(movie.id);
+      if (!acc) {
+        acc = {
+          movie,
+          selectedVenues: new Set(),
+          selectedSessions: 0,
+          weekVenues: new Set(),
+          weekSessions: 0,
+          availableDates: new Set(),
+          lowestSelectedPrice: null,
+          lowestWeekPrice: null,
+          currency: session.currency ?? cityMeta.currency,
+          formats: new Set(),
+        };
+        byMovie.set(movie.id, acc);
+      }
+
+      acc.weekVenues.add(cinema.id);
+      acc.weekSessions += 1;
+      acc.availableDates.add(session.dateIso);
+      acc.formats.add(session.format);
+      if (acc.lowestWeekPrice == null || session.priceAud < acc.lowestWeekPrice) {
+        acc.lowestWeekPrice = session.priceAud;
+      }
+      if (isSelectedDay) {
+        acc.selectedVenues.add(cinema.id);
+        acc.selectedSessions += 1;
+        if (acc.lowestSelectedPrice == null || session.priceAud < acc.lowestSelectedPrice) {
+          acc.lowestSelectedPrice = session.priceAud;
+        }
+      }
+    }
+
+    const calendarOrder = calendarDays.map((d) => d.dateIso);
+    const results: GalleryMovieSummary[] = [];
+    for (const acc of byMovie.values()) {
+      const nextDate =
+        acc.selectedSessions > 0
+          ? filters.dateIso
+          : calendarOrder.find((dIso) => acc.availableDates.has(dIso)) ?? null;
+      results.push({
+        movie: acc.movie,
+        selectedDateVenueCount: acc.selectedVenues.size,
+        selectedDateSessionCount: acc.selectedSessions,
+        weekVenueCount: acc.weekVenues.size,
+        weekSessionCount: acc.weekSessions,
+        nextAvailableDateIso: nextDate,
+        lowestPrice: acc.lowestSelectedPrice ?? acc.lowestWeekPrice,
+        currency: acc.currency,
+        topFormats: Array.from(acc.formats).sort(
+          (a, b) => (formatPriority[b] ?? 1) - (formatPriority[a] ?? 1)
+        ),
+      });
+    }
+    return results;
+  }, [
+    citySessionsAllDays,
+    allCinemasMap,
+    movieMap,
+    filters,
+    favoriteCinemaIds,
+    todayDateIso,
+    localNowMinutes,
+    isTodaySelected,
+    userOrigin,
+    cityMeta.currency,
+    calendarDays,
+  ]);
+
+  const selectedGalleryMovie = useMemo<Movie | null>(() => {
+    if (filters.selectedMovieId === 'all') return null;
+    return movieMap.get(filters.selectedMovieId) ?? null;
+  }, [filters.selectedMovieId, movieMap]);
+
+  const selectedGalleryMovieItem = useMemo<MovieWithVenueSessions | null>(() => {
+    if (!selectedGalleryMovie) return null;
+    return movieBrowseItems.find((item) => item.movie.id === selectedGalleryMovie.id) ?? null;
+  }, [selectedGalleryMovie, movieBrowseItems]);
+
+  const selectedGalleryMovieDates = useMemo<SelectedMovieDateSummary[]>(() => {
+    if (!selectedGalleryMovie) return [];
+    const lowCap = filters.city === 'shanghai' ? 50.0 : 18.0;
+    const midCap = filters.city === 'shanghai' ? 80.0 : 25.0;
+    const byDate = new Map<string, { sessions: number; cinemas: Set<string> }>();
+
+    for (const s of citySessionsAllDays) {
+      if (s.movieId !== selectedGalleryMovie.id) continue;
+      const cinema = allCinemasMap.get(s.cinemaId);
+      if (!cinema) continue;
+      if (filters.selectedCinemaId !== 'all' && cinema.id !== filters.selectedCinemaId) continue;
+      if (filters.chain !== 'all' && cinema.chain !== filters.chain) continue;
+      if (filters.favoritesOnly && !favoriteCinemaIds.has(cinema.id)) continue;
+      if (filters.suburb !== 'all' && cinema.suburb !== filters.suburb) continue;
+      if (filters.vibe !== 'all' && cinema.vibe !== filters.vibe) continue;
+      if (filters.formats.length > 0) {
+        const ok = filters.formats.some(
+          (fmt) =>
+            s.format === fmt ||
+            (fmt === '35mm / 70mm' && s.accessibilityTags.some((tag) => /35mm|70mm/i.test(tag)))
+        );
+        if (!ok) continue;
+      }
+      if (!matchesTimeOfDay(s.startMinutesFromMidnight, filters.timeOfDay)) continue;
+      if (filters.priceCap === 'under18' && s.priceAud > lowCap) continue;
+      if (filters.priceCap === 'under25' && s.priceAud > midCap) continue;
+      if (filters.finishBy !== 'all') {
+        const hh = Number.parseInt(filters.finishBy.slice(0, 2), 10);
+        const mm = Number.parseInt(filters.finishBy.slice(2, 4), 10);
+        const estFinish = s.startMinutesFromMidnight + selectedGalleryMovie.runtimeMinutes + 15;
+        if (estFinish > hh * 60 + mm) continue;
+      }
+      if (filters.dealsOnly && !s.isDealSession) continue;
+      if (
+        s.dateIso === todayDateIso &&
+        !filters.showPastToday &&
+        s.startMinutesFromMidnight + 15 < localNowMinutes
+      ) {
+        continue;
+      }
+      let bucket = byDate.get(s.dateIso);
+      if (!bucket) {
+        bucket = { sessions: 0, cinemas: new Set() };
+        byDate.set(s.dateIso, bucket);
+      }
+      bucket.sessions += 1;
+      bucket.cinemas.add(cinema.id);
+    }
+
+    return calendarDays.map((day) => {
+      const entry = byDate.get(day.dateIso);
+      return {
+        day,
+        sessionCount: entry?.sessions ?? 0,
+        cinemaCount: entry?.cinemas.size ?? 0,
+      };
+    });
+  }, [
+    selectedGalleryMovie,
+    citySessionsAllDays,
+    allCinemasMap,
+    filters.city,
+    filters.selectedCinemaId,
+    filters.chain,
+    filters.favoritesOnly,
+    filters.suburb,
+    filters.vibe,
+    filters.formats,
+    filters.timeOfDay,
+    filters.priceCap,
+    filters.finishBy,
+    filters.dealsOnly,
+    filters.showPastToday,
+    favoriteCinemaIds,
+    todayDateIso,
+    localNowMinutes,
+    calendarDays,
+  ]);
+
+  const handlePickGalleryMovie = (movieId: string, preferredDateIso?: string | null) => {
+    handleUpdateFilters({
+      browseMode: 'gallery',
+      releaseStatus: 'in_cinemas',
+      selectedMovieId: movieId,
+      ...(preferredDateIso ? { dateIso: preferredDateIso } : {}),
+    });
+    window.requestAnimationFrame(() => {
+      document.getElementById('movie-gallery-top')?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'start',
+      });
+    });
+  };
+
+  const handleBackToAllMovies = () => {
+    setFilters((prev) => ({
+      ...prev,
+      browseMode: 'gallery',
+      selectedMovieId: 'all',
+    }));
+    window.requestAnimationFrame(() => {
+      document.getElementById('movie-gallery-top')?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'start',
+      });
+    });
+  };
+
   // Coming Soon filtered items for the active city
   const comingSoonItems = useMemo<ComingSoonMovieItem[]>(() => {
     const query = filters.searchQuery.trim().toLowerCase();
@@ -1121,7 +1474,9 @@ export function App() {
           activeFilterCount={activeFilterCount}
           isTodaySelected={isTodaySelected}
           hiddenPastTodayCount={hiddenPastTodayCount}
-          inCinemasFilmCount={movieBrowseItems.length}
+          inCinemasFilmCount={
+            filters.browseMode === 'gallery' ? galleryMovies.length : movieBrowseItems.length
+          }
           comingSoonFilmCount={comingSoonItems.length}
           onUpdateFilters={handleUpdateFilters}
           onSelectNearHub={handleSelectNearHub}
@@ -1131,17 +1486,19 @@ export function App() {
           onResetFilters={handleResetFilters}
         />
 
-        <ClosestCinemasSpotlight
-          cinemas={cityCinemas}
-          sessions={spotlightDaySessions}
-          movieMap={movieMap}
-          lang={lang}
-          userOrigin={userOrigin}
-          selectedCinemaId={filters.selectedCinemaId}
-          onSelectCinemaFilter={(cid) => handleUpdateFilters({ selectedCinemaId: cid })}
-          onOpenLocationModal={handleOpenLocationModal}
-          onClearLocation={() => handleSelectNearHub('cbd')}
-        />
+        {!(filters.releaseStatus === 'in_cinemas' && filters.browseMode === 'gallery' && selectedGalleryMovie) && (
+          <ClosestCinemasSpotlight
+            cinemas={cityCinemas}
+            sessions={spotlightDaySessions}
+            movieMap={movieMap}
+            lang={lang}
+            userOrigin={userOrigin}
+            selectedCinemaId={filters.selectedCinemaId}
+            onSelectCinemaFilter={(cid) => handleUpdateFilters({ selectedCinemaId: cid })}
+            onOpenLocationModal={handleOpenLocationModal}
+            onClearLocation={() => handleSelectNearHub('cbd')}
+          />
+        )}
 
         {filters.releaseStatus === 'coming_soon' ? (
           <ComingSoonView
@@ -1156,6 +1513,34 @@ export function App() {
             onToggleFavoriteCinema={handleToggleFavoriteCinema}
             onInspectRatings={setInspectedRatingsMovie}
             onWatchTrailer={setTrailerMovie}
+            onResetFilters={handleResetFilters}
+          />
+        ) : filters.browseMode === 'gallery' ? (
+          <MovieGalleryView
+            movies={galleryMovies}
+            selectedMovie={selectedGalleryMovie}
+            selectedMovieItem={selectedGalleryMovieItem}
+            selectedMovieDates={selectedGalleryMovieDates}
+            activeDateIso={filters.dateIso}
+            cityMeta={cityMeta}
+            lang={lang}
+            userOrigin={userOrigin}
+            shortlistedIds={shortlistedIds}
+            favoriteCinemaIds={favoriteCinemaIds}
+            favoritesOnlyActive={filters.favoritesOnly}
+            hiddenPastTodayCount={hiddenPastTodayCount}
+            cheapTuesdayIso={cheapTuesdayDay?.dateIso}
+            onPickMovie={handlePickGalleryMovie}
+            onBackToAllMovies={handleBackToAllMovies}
+            onSelectDate={(dateIso) => handleUpdateFilters({ dateIso })}
+            onSwitchToFullSchedule={() => handleChangeBrowseMode('movies')}
+            onSelectSession={setSelectedSession}
+            onToggleShortlist={handleToggleShortlist}
+            onToggleFavoriteCinema={handleToggleFavoriteCinema}
+            onInspectRatings={setInspectedRatingsMovie}
+            onWatchTrailer={setTrailerMovie}
+            onShowPastToday={() => handleUpdateFilters({ showPastToday: true })}
+            onJumpToCheapTuesday={handleJumpToCheapTuesday}
             onResetFilters={handleResetFilters}
           />
         ) : filters.browseMode === 'movies' ? (

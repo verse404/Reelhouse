@@ -4,6 +4,7 @@ export interface UiStrings {
   cityNames: Record<CityId, string>;
   inCinemas: string;
   comingSoon: string;
+  filmsGallery: string;
   programme: string;
   maisons: string;
   map: string;
@@ -75,7 +76,8 @@ const EN_STRINGS: UiStrings = {
   },
   inCinemas: 'In Cinemas',
   comingSoon: 'Coming Soon',
-  programme: 'Programme',
+  filmsGallery: 'All Movies',
+  programme: 'Schedule',
   maisons: 'Maisons',
   map: 'Map',
   myLocation: 'MY LOCATION',
@@ -147,7 +149,8 @@ const ZH_STRINGS: UiStrings = {
   },
   inCinemas: '正在热映',
   comingSoon: '即将上映',
-  programme: '按影片排片',
+  filmsGallery: '全部影片',
+  programme: '全部排片',
   maisons: '按影院浏览',
   map: '影院地图',
   myLocation: '我的位置',

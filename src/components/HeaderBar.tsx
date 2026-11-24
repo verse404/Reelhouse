@@ -137,6 +137,15 @@ export function HeaderBar({
           <div className="couture-tabs" role="group" aria-label="Browse perspective">
             <button
               type="button"
+              id="browse-mode-gallery"
+              className={`couture-tab ${browseMode === 'gallery' ? 'couture-tab--active' : ''}`}
+              aria-pressed={browseMode === 'gallery'}
+              onClick={() => onChangeBrowseMode('gallery')}
+            >
+              <span>{t.filmsGallery}</span>
+            </button>
+            <button
+              type="button"
               id="browse-mode-movies"
               className={`couture-tab ${browseMode === 'movies' ? 'couture-tab--active' : ''}`}
               aria-pressed={browseMode === 'movies'}

@@ -123,9 +123,17 @@ export function getSafePosterImageUrl(rawUrl?: string): string | null {
   try {
     const parsed = new URL(rawUrl);
     if (parsed.protocol !== 'https:') return null;
-    if (parsed.hostname.toLowerCase() !== 'image.tmdb.org') return null;
-    if (!parsed.pathname.startsWith('/t/p/')) return null;
-    return parsed.toString();
+    const host = parsed.hostname.toLowerCase();
+    if (host === 'image.tmdb.org' && parsed.pathname.startsWith('/t/p/')) {
+      return parsed.toString();
+    }
+    if (host === 'm.media-amazon.com' && parsed.pathname.startsWith('/images/')) {
+      return parsed.toString();
+    }
+    if ((host === 'pipi.cn' || host.endsWith('.pipi.cn')) && parsed.pathname.length > 1) {
+      return parsed.toString();
+    }
+    return null;
   } catch {
     return null;
   }
@@ -691,7 +699,7 @@ export function parseValidatedUrlFilters(search: string): Partial<FilterState> {
     }
 
     const mode = params.get('mode');
-    if (mode === 'movies' || mode === 'cinemas' || mode === 'map') {
+    if (mode === 'gallery' || mode === 'movies' || mode === 'cinemas' || mode === 'map') {
       out.browseMode = mode as BrowseMode;
     }
 
@@ -907,7 +915,7 @@ export function buildShareableFilterQueryString(
   if (filters.releaseStatus !== 'in_cinemas') {
     params.set('status', filters.releaseStatus);
   }
-  if (filters.browseMode !== 'movies') {
+  if (filters.browseMode !== 'gallery') {
     params.set('mode', filters.browseMode);
   }
   if (filters.releaseStatus === 'in_cinemas' && filters.dateIso !== defaultTodayIso) {

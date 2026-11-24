@@ -6,7 +6,7 @@ export type CurrencyCode = 'AUD' | 'CNY';
 
 export type AppLanguage = 'en' | 'zh';
 
-export type BrowseMode = 'movies' | 'cinemas' | 'map';
+export type BrowseMode = 'gallery' | 'movies' | 'cinemas' | 'map';
 
 export type ReleaseStatus = 'in_cinemas' | 'coming_soon';
 
