@@ -1,7 +1,18 @@
 import { useState } from 'react';
-import { Clock, ExternalLink, Heart, MapPin, Navigation, Play, Train } from 'lucide-react';
-import type { AppLanguage, Cinema, Movie, ScreeningSession } from '../types/cinema';
-import { formatDistanceKm, formatRuntime } from '../utils/formatters';
+import {
+  Clock,
+  Compass,
+  ExternalLink,
+  Heart,
+  MapPin,
+  Navigation,
+  Play,
+  Sparkles,
+  Tag,
+  Train,
+} from 'lucide-react';
+import type { AppLanguage, Cinema, FormatType, Movie, ScreeningSession } from '../types/cinema';
+import { formatDistanceKm, formatRuntime, formatSessionPrice } from '../utils/formatters';
 import {
   getDisplayCinemaName,
   getDisplayMovieSynopsis,
@@ -54,6 +65,22 @@ type MovieSortOption =
   | 'douban'
   | 'shortest'
   | 'sessions';
+
+const FORMAT_RANK: Record<FormatType, number> = {
+  '35mm / 70mm': 6,
+  IMAX: 5,
+  'Dolby Atmos': 4,
+  'Gold Class / LUX': 3,
+  'Vmax / Xtremescreen': 2,
+  Standard: 1,
+};
+
+function scrollToVenueRow(movieId: string, cinemaId: string) {
+  const el = document.getElementById(`venue-row-${movieId}-${cinemaId}`);
+  if (el) {
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+}
 
 export function MovieBrowseView({
   items,
@@ -283,13 +310,102 @@ export function MovieBrowseView({
                   </span>
                 </div>
 
+                {venues.length > 1 && (() => {
+                  let cheapest: { cinema: Cinema; session: ScreeningSession; km: number } | null =
+                    null;
+                  let closest: { cinema: Cinema; km: number } | null = null;
+                  let bestFmt: { cinema: Cinema; format: FormatType; rank: number } | null = null;
+
+                  for (const v of venues) {
+                    const km = getCinemaDistanceInfo(v.cinema, userOrigin).km;
+                    if (!closest || km < closest.km) {
+                      closest = { cinema: v.cinema, km };
+                    }
+                    for (const s of v.sessions) {
+                      if (
+                        !cheapest ||
+                        s.priceAud < cheapest.session.priceAud ||
+                        (s.priceAud === cheapest.session.priceAud && km < cheapest.km)
+                      ) {
+                        cheapest = { cinema: v.cinema, session: s, km };
+                      }
+                      const rank = FORMAT_RANK[s.format] ?? 1;
+                      if (!bestFmt || rank > bestFmt.rank) {
+                        bestFmt = { cinema: v.cinema, format: s.format, rank };
+                      }
+                    }
+                  }
+
+                  return (
+                    <div
+                      className="film-quick-verdict"
+                      aria-label={lang === 'zh' ? '快捷选座建议' : 'Quick venue highlights'}
+                    >
+                      {cheapest && (
+                        <button
+                          type="button"
+                          className="verdict-jump-pill verdict-jump-pill--deal"
+                          onClick={() => scrollToVenueRow(movie.id, cheapest!.cinema.id)}
+                        >
+                          <Tag size={11} aria-hidden="true" />
+                          <span>
+                            {lang === 'zh' ? '今日最低 ' : 'Cheapest '}
+                            <strong>
+                              {formatSessionPrice(
+                                cheapest.session.priceAud,
+                                cheapest.session.currency ?? (isShanghai ? 'CNY' : 'AUD'),
+                                true
+                              )}
+                            </strong>
+                            {' · '}
+                            {getDisplayCinemaName(cheapest.cinema, lang)}
+                          </span>
+                        </button>
+                      )}
+                      {closest && (
+                        <button
+                          type="button"
+                          className="verdict-jump-pill"
+                          onClick={() => scrollToVenueRow(movie.id, closest!.cinema.id)}
+                        >
+                          <Compass size={11} aria-hidden="true" />
+                          <span>
+                            {lang === 'zh' ? '最近 ' : 'Closest '}
+                            <strong>{formatDistanceKm(closest.km, lang)}</strong>
+                            {' · '}
+                            {getDisplayCinemaName(closest.cinema, lang)}
+                          </span>
+                        </button>
+                      )}
+                      {bestFmt && bestFmt.rank > 1 && (
+                        <button
+                          type="button"
+                          className="verdict-jump-pill verdict-jump-pill--format"
+                          onClick={() => scrollToVenueRow(movie.id, bestFmt!.cinema.id)}
+                        >
+                          <Sparkles size={11} aria-hidden="true" />
+                          <span>
+                            <strong>{bestFmt.format}</strong>
+                            {' · '}
+                            {getDisplayCinemaName(bestFmt.cinema, lang)}
+                          </span>
+                        </button>
+                      )}
+                    </div>
+                  );
+                })()}
+
                 <div className="venue-schedule-stack">
                   {venues.map(({ cinema, sessions }) => {
                     const isFav = favoriteCinemaIds.has(cinema.id);
                     const dist = getCinemaDistanceInfo(cinema, userOrigin);
                     const displayCinemaName = getDisplayCinemaName(cinema, lang);
                     return (
-                      <div key={cinema.id} className="venue-schedule-row">
+                      <div
+                        key={cinema.id}
+                        id={`venue-row-${movie.id}-${cinema.id}`}
+                        className="venue-schedule-row"
+                      >
                         <div className="venue-schedule-row__info">
                           <div className="venue-schedule-row__title-line">
                             <button

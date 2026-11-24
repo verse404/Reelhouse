@@ -107,7 +107,7 @@ const SPA_SECURITY_HEADERS = {
   'Referrer-Policy': 'strict-origin-when-cross-origin',
   'Permissions-Policy': 'camera=(), microphone=(), geolocation=(self)',
   'Content-Security-Policy':
-    "default-src 'self'; script-src 'self'; worker-src 'self'; manifest-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' https://image.tmdb.org https://server.arcgisonline.com data:; connect-src 'self'; frame-src https://www.youtube-nocookie.com https://www.youtube.com; frame-ancestors 'self'; object-src 'none'; base-uri 'self';",
+    "default-src 'self'; script-src 'self'; worker-src 'self'; manifest-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' https://image.tmdb.org https://m.media-amazon.com https://*.pipi.cn https://server.arcgisonline.com data:; connect-src 'self'; frame-src https://www.youtube-nocookie.com https://www.youtube.com; frame-ancestors 'self'; object-src 'none'; base-uri 'self';",
 };
 
 function isAllowedOrigin(origin, requestHostHeader) {
@@ -590,9 +590,46 @@ const server = http.createServer(async (req, res) => {
   if (isReadMethod && parsedUrl.pathname === '/api/catalog') {
     try {
       const data = await getCachedOrFreshCatalog(false);
-      const etagSeed = `${data.syncedAtIso || ''}:${data.ratingsSyncedAtIso || ''}:${Array.isArray(data.sessions) ? data.sessions.length : 0}:${Array.isArray(data.movies) ? data.movies.length : 0}`;
+      const cityFilter = parsedUrl.searchParams.get('city');
+      const isValidCity =
+        cityFilter === 'melbourne' || cityFilter === 'sydney' || cityFilter === 'shanghai';
+
+      let responsePayload = data;
+      if (isValidCity && data && data.mode === 'live') {
+        const citySessions = Array.isArray(data.sessions)
+          ? data.sessions.filter((s) => s.city === cityFilter)
+          : [];
+        const cityMovieIds = new Set(citySessions.map((s) => s.movieId));
+        const cityMovies = Array.isArray(data.movies)
+          ? data.movies.filter((m) => cityMovieIds.has(m.id))
+          : [];
+        const cityCinemas = Array.isArray(data.cinemas)
+          ? data.cinemas.filter((c) => c.city === cityFilter)
+          : [];
+        const cityComingSoon = Array.isArray(data.comingSoonMovies)
+          ? data.comingSoonMovies
+              .map((m) => {
+                const matchingVenues = Array.isArray(m.upcomingVenues)
+                  ? m.upcomingVenues.filter((v) => v.city === cityFilter)
+                  : [];
+                return matchingVenues.length > 0 ? { ...m, upcomingVenues: matchingVenues } : null;
+              })
+              .filter(Boolean)
+          : [];
+
+        responsePayload = {
+          ...data,
+          city: cityFilter,
+          cinemas: cityCinemas,
+          movies: cityMovies,
+          comingSoonMovies: cityComingSoon,
+          sessions: citySessions,
+        };
+      }
+
+      const etagSeed = `${isValidCity ? cityFilter : 'all'}:${data.syncedAtIso || ''}:${data.ratingsSyncedAtIso || ''}:${Array.isArray(responsePayload.sessions) ? responsePayload.sessions.length : 0}:${Array.isArray(responsePayload.movies) ? responsePayload.movies.length : 0}`;
       const catalogEtag = `W/"${crypto.createHash('sha1').update(etagSeed).digest('hex').slice(0, 16)}"`;
-      writeJson(req, res, 200, data, {
+      writeJson(req, res, 200, responsePayload, {
         'Cache-Control': 'public, max-age=60, must-revalidate',
         ETag: catalogEtag,
       });

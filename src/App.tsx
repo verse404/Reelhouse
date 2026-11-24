@@ -202,21 +202,19 @@ export function App() {
 
   useEffect(() => {
     let cancelled = false;
-    cinemaDataService.hydrateFromLiveBff().then((status) => {
+    cinemaDataService.hydrateFromLiveBff(filters.city).then((status) => {
       if (!cancelled) {
         setSyncStatus(status);
-        if (status.mode === 'live') {
-          setCatalogRevision((r) => r + 1);
-        }
+        setCatalogRevision((r) => r + 1);
       }
     });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [filters.city]);
 
   const handleReloadLiveCatalog = async () => {
-    const status = await cinemaDataService.hydrateFromLiveBff();
+    const status = await cinemaDataService.hydrateFromLiveBff(filters.city, true);
     setSyncStatus(status);
     setCatalogRevision((r) => r + 1);
   };

@@ -585,6 +585,77 @@ export function downloadIcsFile(input: GoogleCalendarSessionInput): void {
   window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1500);
 }
 
+export interface ReleaseReminderIcsInput {
+  movieTitle: string;
+  director: string;
+  releaseDateIso: string;
+  cityName: string;
+  genres: string[];
+}
+
+/**
+ * Builds an all-day RFC 5545 `.ics` calendar reminder for an upcoming theatrical release date.
+ */
+export function buildReleaseReminderIcsContent(input: ReleaseReminderIcsInput): string {
+  const [y, m, d] = input.releaseDateIso.split('-').map(Number);
+  const startDt = new Date(Date.UTC(y, m - 1, d));
+  const endDt = new Date(Date.UTC(y, m - 1, d + 1));
+  const pad2 = (n: number) => String(n).padStart(2, '0');
+  const formatYmd = (dt: Date) =>
+    `${dt.getUTCFullYear()}${pad2(dt.getUTCMonth() + 1)}${pad2(dt.getUTCDate())}`;
+
+  const safeUidSlug = `release-${input.releaseDateIso}-${input.movieTitle}`
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .slice(0, 52);
+
+  const desc = [
+    `${input.movieTitle} — Directed by ${input.director}`,
+    `Genres: ${input.genres.join(', ') || 'Feature Film'}`,
+    `Opening in ${input.cityName} cinemas. Check Reelhouse for session times & tickets.`,
+  ].join('\n');
+
+  const lines = [
+    'BEGIN:VCALENDAR',
+    'VERSION:2.0',
+    'PRODID:-//Reelhouse//Release Reminder//EN',
+    'CALSCALE:GREGORIAN',
+    'METHOD:PUBLISH',
+    'BEGIN:VEVENT',
+    `UID:${safeUidSlug}@reelhouse.app`,
+    `DTSTAMP:${formatUtcIcsStamp(Date.now())}`,
+    `DTSTART;VALUE=DATE:${formatYmd(startDt)}`,
+    `DTEND;VALUE=DATE:${formatYmd(endDt)}`,
+    `SUMMARY:${escapeIcsText(`In Cinemas (${input.cityName}): ${input.movieTitle}`)}`,
+    `DESCRIPTION:${escapeIcsText(desc)}`,
+    'END:VEVENT',
+    'END:VCALENDAR',
+  ];
+  return `${lines.join('\r\n')}\r\n`;
+}
+
+/**
+ * Triggers a safe client-side `.ics` release-day reminder download for Apple Calendar / Outlook / Google Calendar.
+ */
+export function downloadReleaseReminderIcs(input: ReleaseReminderIcsInput): void {
+  if (!SAFE_ISO_DATE_REGEX.test(input.releaseDateIso)) return;
+  const icsBody = buildReleaseReminderIcsContent(input);
+  const blob = new Blob([icsBody], { type: 'text/calendar;charset=utf-8' });
+  const objectUrl = URL.createObjectURL(blob);
+  const slug = `${input.movieTitle}-${input.releaseDateIso}`
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 48);
+  const link = document.createElement('a');
+  link.href = objectUrl;
+  link.download = `${slug || 'reelhouse-release'}.ics`;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1500);
+}
+
 const VALID_URL_FORMATS = new Set<FormatType>([
   'IMAX',
   '35mm / 70mm',

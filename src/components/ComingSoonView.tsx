@@ -2,6 +2,7 @@ import { useState } from 'react';
 import {
   Bell,
   Calendar,
+  CalendarPlus,
   Check,
   Clock,
   ExternalLink,
@@ -34,7 +35,11 @@ import {
   getUiText,
 } from '../utils/i18n';
 import { getCinemaDistanceInfo, type UserLocationOrigin } from '../utils/proximity';
-import { buildSafeGoogleMapsUrl, getSafeOutboundCinemaUrl } from '../utils/security';
+import {
+  buildSafeGoogleMapsUrl,
+  downloadReleaseReminderIcs,
+  getSafeOutboundCinemaUrl,
+} from '../utils/security';
 import { MoviePoster } from './MoviePoster';
 import { RatingsPillBar } from './RatingsPillBar';
 
@@ -607,6 +612,33 @@ export function ComingSoonView({
                             : 'Save to Watchlist'}
                       </span>
                     </button>
+
+                    {movie.releaseDateIso && (
+                      <button
+                        type="button"
+                        id={`cs-release-ics-${movie.id}`}
+                        className="watchlist-btn"
+                        onClick={() =>
+                          downloadReleaseReminderIcs({
+                            movieTitle: displayTitle,
+                            director: movie.director,
+                            releaseDateIso: movie.releaseDateIso!,
+                            cityName: displayCityName,
+                            genres: movie.genres,
+                          })
+                        }
+                        title={
+                          lang === 'zh'
+                            ? '导出公映日历提醒 (.ics) 到 Apple 日历 / Outlook'
+                            : 'Download release-day .ics reminder for Apple Calendar / Outlook'
+                        }
+                      >
+                        <CalendarPlus size={14} aria-hidden="true" />
+                        <span>
+                          {lang === 'zh' ? '添加上映日历 (.ics)' : 'Add Release Reminder (.ics)'}
+                        </span>
+                      </button>
+                    )}
                   </div>
                 </div>
               </div>

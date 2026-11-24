@@ -10,7 +10,7 @@ const securityHeaders = {
   'Referrer-Policy': 'strict-origin-when-cross-origin',
   'Permissions-Policy': 'camera=(), microphone=(), geolocation=(self)',
   'Content-Security-Policy':
-    "img-src 'self' https://image.tmdb.org https://server.arcgisonline.com data:; worker-src 'self'; manifest-src 'self'; frame-ancestors 'self'; frame-src https://www.youtube-nocookie.com https://www.youtube.com; object-src 'none'; base-uri 'self';",
+    "img-src 'self' https://image.tmdb.org https://m.media-amazon.com https://*.pipi.cn https://server.arcgisonline.com data:; worker-src 'self'; manifest-src 'self'; frame-ancestors 'self'; frame-src https://www.youtube-nocookie.com https://www.youtube.com; object-src 'none'; base-uri 'self';",
 };
 
 export default defineConfig({

@@ -2,10 +2,7 @@ import {
   buildSevenDayCalendar,
   CINEMAS,
   CITIES,
-  COMING_SOON_MOVIES,
-  generateCuratedSessions,
-  MOVIES,
-} from '../data/catalog';
+} from '../data/citiesMeta';
 import type {
   CalendarDayOption,
   Cinema,
@@ -26,11 +23,12 @@ export interface CinemaDataProvider {
   getSessionsForCityAndDate(city: CityId, dateIso: string): ScreeningSession[];
   getSessionById(sessionId: string): ScreeningSession | undefined;
   getSyncStatus(): LiveSyncStatus;
-  hydrateFromLiveBff(): Promise<LiveSyncStatus>;
+  hydrateFromLiveBff(city?: CityId, forceRefresh?: boolean): Promise<LiveSyncStatus>;
 }
 
 interface BffCatalogPayload {
   mode?: 'curated' | 'live';
+  city?: CityId | 'all';
   syncedAtIso?: string | null;
   hasLiveSessions?: boolean;
   configuredApis?: {
@@ -45,22 +43,33 @@ interface BffCatalogPayload {
   sessions?: ScreeningSession[];
 }
 
+function mergeById<T extends { id: string }>(existing: T[], incoming: T[]): T[] {
+  if (incoming.length === 0) return existing;
+  const map = new Map<string, T>();
+  for (const item of existing) map.set(item.id, item);
+  for (const item of incoming) map.set(item.id, item);
+  return Array.from(map.values());
+}
+
 class HybridAustralianCinemaProvider implements CinemaDataProvider {
-  private readonly curatedSessions: ScreeningSession[];
   private activeCinemas: Cinema[];
   private activeMovies: Movie[];
   private activeComingSoon: Movie[];
   private activeSessions: ScreeningSession[];
   private sessionIndex: Map<string, ScreeningSession>;
   private syncStatus: LiveSyncStatus;
+  private loadedCities: Set<CityId>;
+  private inFlightByCity: Map<string, Promise<LiveSyncStatus>>;
+  private fullStaticLoaded = false;
 
   constructor() {
-    this.curatedSessions = generateCuratedSessions();
     this.activeCinemas = CINEMAS;
-    this.activeMovies = MOVIES;
-    this.activeComingSoon = COMING_SOON_MOVIES;
-    this.activeSessions = this.curatedSessions;
-    this.sessionIndex = new Map(this.activeSessions.map((s) => [s.id, s]));
+    this.activeMovies = [];
+    this.activeComingSoon = [];
+    this.activeSessions = [];
+    this.sessionIndex = new Map();
+    this.loadedCities = new Set();
+    this.inFlightByCity = new Map();
     this.syncStatus = {
       mode: 'curated',
       syncedAtIso: null,
@@ -105,21 +114,61 @@ class HybridAustralianCinemaProvider implements CinemaDataProvider {
     return this.syncStatus;
   }
 
-  async hydrateFromLiveBff(): Promise<LiveSyncStatus> {
+  private async loadCuratedFallback(): Promise<void> {
+    if (this.activeSessions.length > 0 && this.activeMovies.length > 0) return;
+    const mod = await import('../data/catalog');
+    const curatedSessions = mod.generateCuratedSessions();
+    this.activeCinemas = mod.CINEMAS;
+    this.activeMovies = mod.MOVIES;
+    this.activeComingSoon = mod.COMING_SOON_MOVIES;
+    this.activeSessions = curatedSessions;
+    this.sessionIndex = new Map(curatedSessions.map((s) => [s.id, s]));
+  }
+
+  async hydrateFromLiveBff(
+    city: CityId = 'melbourne',
+    forceRefresh = false
+  ): Promise<LiveSyncStatus> {
+    if (!forceRefresh && (this.fullStaticLoaded || this.loadedCities.has(city))) {
+      return this.syncStatus;
+    }
+
+    const inflightKey = `${city}:${forceRefresh ? '1' : '0'}`;
+    const existingPromise = this.inFlightByCity.get(inflightKey);
+    if (existingPromise) return existingPromise;
+
+    const task = this.performHydrate(city, forceRefresh).finally(() => {
+      this.inFlightByCity.delete(inflightKey);
+    });
+    this.inFlightByCity.set(inflightKey, task);
+    return task;
+  }
+
+  private async performHydrate(city: CityId, forceRefresh: boolean): Promise<LiveSyncStatus> {
     try {
-      let response = await fetch('/api/catalog', {
+      if (forceRefresh) {
+        this.loadedCities.clear();
+        this.fullStaticLoaded = false;
+      }
+
+      let isFullStaticFallback = false;
+      let response = await fetch(`/api/catalog?city=${encodeURIComponent(city)}`, {
         method: 'GET',
         headers: { Accept: 'application/json' },
       }).catch(() => null);
 
       const contentType = response?.headers.get('content-type') || '';
       if (!response || !response.ok || !contentType.includes('application/json')) {
+        isFullStaticFallback = true;
         response = await fetch('./live_catalog.json', {
           method: 'GET',
           headers: { Accept: 'application/json' },
         }).catch(() => null);
       }
-      if (!response || !response.ok) return this.syncStatus;
+      if (!response || !response.ok) {
+        await this.loadCuratedFallback();
+        return this.syncStatus;
+      }
 
       const payload = (await response.json()) as BffCatalogPayload;
       const configuredApis = {
@@ -134,29 +183,38 @@ class HybridAustralianCinemaProvider implements CinemaDataProvider {
         Array.isArray(payload.movies) &&
         payload.movies.length > 0
       ) {
-        this.activeMovies = payload.movies;
-        if (Array.isArray(payload.comingSoonMovies) && payload.comingSoonMovies.length > 0) {
-          this.activeComingSoon = payload.comingSoonMovies;
-        }
-        if (Array.isArray(payload.cinemas) && payload.cinemas.length > 0) {
-          this.activeCinemas = payload.cinemas;
-        }
-
-        if (payload.hasLiveSessions && Array.isArray(payload.sessions) && payload.sessions.length > 0) {
-          this.activeSessions = payload.sessions;
+        if (isFullStaticFallback || payload.city === 'all' || !payload.city) {
+          this.fullStaticLoaded = true;
+          this.loadedCities.add('melbourne');
+          this.loadedCities.add('sydney');
+          this.loadedCities.add('shanghai');
+          this.activeMovies = payload.movies;
+          if (Array.isArray(payload.comingSoonMovies) && payload.comingSoonMovies.length > 0) {
+            this.activeComingSoon = payload.comingSoonMovies;
+          }
+          if (Array.isArray(payload.cinemas) && payload.cinemas.length > 0) {
+            this.activeCinemas = payload.cinemas;
+          }
+          if (payload.hasLiveSessions && Array.isArray(payload.sessions) && payload.sessions.length > 0) {
+            this.activeSessions = payload.sessions;
+          } else {
+            await this.remapCuratedSessions();
+          }
         } else {
-          // If user entered TMDB/OMDb keys first before SerpApi, map live TMDB films onto
-          // curated Melbourne & Sydney timetable slots so sessions remain browsable immediately.
-          const oldIds = MOVIES.map((m) => m.id);
-          const idRemap = new Map<string, string>();
-          oldIds.forEach((oldId, idx) => {
-            const liveMovie = this.activeMovies[idx % this.activeMovies.length];
-            if (liveMovie) idRemap.set(oldId, liveMovie.id);
-          });
-          this.activeSessions = this.curatedSessions.map((s) => ({
-            ...s,
-            movieId: idRemap.get(s.movieId) ?? this.activeMovies[0].id,
-          }));
+          this.loadedCities.add(city);
+          this.activeMovies = mergeById(this.activeMovies, payload.movies);
+          if (Array.isArray(payload.comingSoonMovies)) {
+            this.activeComingSoon = mergeById(this.activeComingSoon, payload.comingSoonMovies);
+          }
+          if (Array.isArray(payload.cinemas) && payload.cinemas.length > 0) {
+            this.activeCinemas = mergeById(this.activeCinemas, payload.cinemas);
+          }
+          if (payload.hasLiveSessions && Array.isArray(payload.sessions) && payload.sessions.length > 0) {
+            const otherCities = this.activeSessions.filter((s) => s.city !== city);
+            this.activeSessions = [...otherCities, ...payload.sessions];
+          } else {
+            await this.remapCuratedSessions();
+          }
         }
 
         this.sessionIndex = new Map(this.activeSessions.map((s) => [s.id, s]));
@@ -167,6 +225,7 @@ class HybridAustralianCinemaProvider implements CinemaDataProvider {
           configuredApis,
         };
       } else {
+        await this.loadCuratedFallback();
         this.syncStatus = {
           mode: 'curated',
           syncedAtIso: null,
@@ -175,9 +234,24 @@ class HybridAustralianCinemaProvider implements CinemaDataProvider {
         };
       }
     } catch {
-      // Offline or standalone static build — keep curated salon catalog cleanly
+      await this.loadCuratedFallback();
     }
     return this.syncStatus;
+  }
+
+  private async remapCuratedSessions(): Promise<void> {
+    const mod = await import('../data/catalog');
+    const curatedSessions = mod.generateCuratedSessions();
+    const oldIds = mod.MOVIES.map((m) => m.id);
+    const idRemap = new Map<string, string>();
+    oldIds.forEach((oldId, idx) => {
+      const liveMovie = this.activeMovies[idx % this.activeMovies.length];
+      if (liveMovie) idRemap.set(oldId, liveMovie.id);
+    });
+    this.activeSessions = curatedSessions.map((s) => ({
+      ...s,
+      movieId: idRemap.get(s.movieId) ?? this.activeMovies[0]?.id ?? s.movieId,
+    }));
   }
 }
 

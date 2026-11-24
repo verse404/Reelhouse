@@ -1404,6 +1404,10 @@ function createFallbackMovieRecord(rawTitle, posterIndex, hintMeta = null) {
     Array.isArray(hintMeta?.castLead) && hintMeta.castLead.length > 0
       ? hintMeta.castLead
       : ['Theatrical Cast'];
+  const fallbackPoster =
+    typeof hintMeta?.posterUrl === 'string' && hintMeta.posterUrl.startsWith('https://')
+      ? hintMeta.posterUrl
+      : undefined;
 
   return {
     id: `live-film-${slug}`,
@@ -1417,6 +1421,7 @@ function createFallbackMovieRecord(rawTitle, posterIndex, hintMeta = null) {
     genres,
     criticScorePercent: 0,
     audienceScorePercent: 0,
+    ...(fallbackPoster ? { posterUrl: fallbackPoster } : {}),
     ratings: {
       imdb: {
         score: null,
@@ -1498,6 +1503,9 @@ async function resolveMovieViaTmdb(rawTitle, tmdbApiKey, posterIndex, hintMeta =
         } else {
           bestFull.title = rawTitle;
         }
+        if (!bestFull.posterUrl && hintMeta?.posterUrl) {
+          bestFull.posterUrl = hintMeta.posterUrl;
+        }
         return bestFull;
       }
     }
@@ -1511,6 +1519,9 @@ async function resolveMovieViaTmdb(rawTitle, tmdbApiKey, posterIndex, hintMeta =
         full.title = getPreferredMovieDisplayTitle(full.title, full.title);
       } else {
         full.title = getPreferredMovieDisplayTitle(rawTitle, full.title);
+      }
+      if (!full.posterUrl && hintMeta?.posterUrl) {
+        full.posterUrl = hintMeta.posterUrl;
       }
       return full;
     }
@@ -2268,10 +2279,15 @@ export async function syncLiveCatalog() {
           .map((c) => c.trim())
           .filter(Boolean)
           .slice(0, 4);
+        const rawImg =
+          typeof mv.img === 'string' && mv.img.startsWith('https://')
+            ? mv.img.replace(/\?imageMogr2.*$/, '')
+            : undefined;
         rawMovieHints.set(normKey, {
           runtimeMinutes: Number(mv.dur) || 0,
           genres: mappedGenres,
           castLead: castList,
+          ...(rawImg ? { posterUrl: rawImg } : {}),
         });
       }
 

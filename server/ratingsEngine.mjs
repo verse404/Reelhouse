@@ -219,6 +219,9 @@ async function fetchOmdbForMovie(movie, omdbApiKey) {
   }
 
   const out = {};
+  if (typeof data.Poster === 'string' && data.Poster.startsWith('https://')) {
+    out.posterUrl = data.Poster;
+  }
   const imdbScore = Number.parseFloat(data.imdbRating);
   const imdbVotes = Number.parseInt(String(data.imdbVotes || '').replace(/,/g, ''), 10);
   if (Number.isFinite(imdbScore) && imdbScore > 0) {
@@ -677,7 +680,12 @@ export async function enrichMoviesWithTrueRatings(
       mdbRes?.rtUrl ||
       `https://www.rottentomatoes.com/search?search=${encodeURIComponent(movie.title)}`;
 
-    // --- E. Reconcile True Douban ---
+    // --- E2. Fallback poster from OMDb when TMDB lacks a poster_path ---
+    if (!movie.posterUrl && omdbRes?.posterUrl && omdbRes.posterUrl.startsWith('https://')) {
+      movie.posterUrl = omdbRes.posterUrl;
+    }
+
+    // --- F. Reconcile True Douban ---
     const zhTitle = String(
       doubanRes?.chineseTitle || movie.ratings?.douban?.chineseTitle || movie.title
     )

@@ -1,8 +1,8 @@
 {
   "mode": "live",
-  "syncedAtIso": "2026-11-24T07:10:08.818Z",
+  "syncedAtIso": "2026-11-24T07:37:05.757Z",
   "serpSyncedAtIso": "2026-11-24T07:10:08.818Z",
-  "ratingsSyncedAtIso": "2026-11-24T07:10:08.818Z",
+  "ratingsSyncedAtIso": "2026-11-24T07:37:05.757Z",
   "configuredApis": {
     "tmdb": true,
     "omdb": true,
@@ -6582,6 +6582,7 @@
       ],
       "criticScorePercent": 0,
       "audienceScorePercent": 0,
+      "posterUrl": "https://p0.pipi.cn/mediaplus/friday_image_fe/e42958bff87ea48457374c7ac77f798ab70e5.jpg",
       "ratings": {
         "imdb": {
           "score": null,
