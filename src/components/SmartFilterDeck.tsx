@@ -85,36 +85,36 @@ const ALL_FORMATS: FormatType[] = [
   'Standard',
 ];
 
-const TIME_BUCKETS: Array<{ value: TimeOfDay; label: string; hint: string }> = [
-  { value: 'all', label: 'Any Time', hint: 'All day' },
-  { value: 'morning', label: 'Morning', hint: 'Before 12 pm' },
-  { value: 'afternoon', label: 'Afternoon', hint: '12–5 pm' },
-  { value: 'evening', label: 'Evening', hint: '5–8:30 pm' },
-  { value: 'late', label: 'Late Night', hint: '8:30 pm+' },
+const TIME_BUCKETS: Array<{ value: TimeOfDay; label: string; labelZh: string; hint: string }> = [
+  { value: 'all', label: 'Any Time', labelZh: '全天不限', hint: 'All day' },
+  { value: 'morning', label: 'Morning', labelZh: '上午场', hint: 'Before 12 pm' },
+  { value: 'afternoon', label: 'Afternoon', labelZh: '下午场', hint: '12–5 pm' },
+  { value: 'evening', label: 'Evening', labelZh: '黄金晚场', hint: '5–8:30 pm' },
+  { value: 'late', label: 'Late Night', labelZh: '深夜场', hint: '8:30 pm+' },
 ];
 
-const VIBE_OPTIONS: Array<CinemaVibe | 'all'> = [
-  'all',
-  'Indie & Arthouse',
-  'Heritage Palace',
-  'Grand Format',
-  'Boutique Luxury',
-  'Major Multiplex',
+const VIBE_OPTIONS: Array<{ value: CinemaVibe | 'all'; labelEn: string; labelZh: string }> = [
+  { value: 'all', labelEn: 'All Venue Vibes', labelZh: '全部风格' },
+  { value: 'Indie & Arthouse', labelEn: 'Indie & Arthouse', labelZh: '独立与艺术影院' },
+  { value: 'Heritage Palace', labelEn: 'Heritage Palace', labelZh: '历史老牌影宫' },
+  { value: 'Grand Format', labelEn: 'Grand Format', labelZh: '巨幕与特效厅' },
+  { value: 'Boutique Luxury', labelEn: 'Boutique Luxury', labelZh: '精品奢华厅' },
+  { value: 'Major Multiplex', labelEn: 'Major Multiplex', labelZh: '大型院线影城' },
 ];
 
-const RATING_OPTIONS: Array<{ value: MinRatingOption; label: string }> = [
-  { value: 'all', label: 'Any Score' },
-  { value: 'imdb8', label: 'IMDb 8.0+' },
-  { value: 'rt90', label: 'Rotten Tomatoes 90%+' },
-  { value: 'douban8', label: 'Douban (豆瓣) 8.0+' },
+const RATING_OPTIONS: Array<{ value: MinRatingOption; label: string; labelZh: string }> = [
+  { value: 'all', label: 'Any Score', labelZh: '不限评分' },
+  { value: 'imdb8', label: 'IMDb 8.0+', labelZh: 'IMDb 8.0+' },
+  { value: 'rt90', label: 'Rotten Tomatoes 90%+', labelZh: '烂番茄 90%+' },
+  { value: 'douban8', label: 'Douban (豆瓣) 8.0+', labelZh: '豆瓣 8.0+' },
 ];
 
-const FINISH_BY_OPTIONS: Array<{ value: FinishByOption; label: string }> = [
-  { value: 'all', label: 'Any Finish' },
-  { value: '1800', label: 'By 6:00 pm' },
-  { value: '2130', label: 'By 9:30 pm' },
-  { value: '2230', label: 'By 10:30 pm' },
-  { value: '2330', label: 'By 11:30 pm' },
+const FINISH_BY_OPTIONS: Array<{ value: FinishByOption; label: string; labelZh: string }> = [
+  { value: 'all', label: 'Any Finish', labelZh: '散场不限' },
+  { value: '1800', label: 'By 6:00 pm', labelZh: '18:00 前散场' },
+  { value: '2130', label: 'By 9:30 pm', labelZh: '21:30 前散场' },
+  { value: '2230', label: 'By 10:30 pm', labelZh: '22:30 前散场' },
+  { value: '2330', label: 'By 11:30 pm', labelZh: '23:30 前散场' },
 ];
 
 export function SmartFilterDeck({
@@ -149,14 +149,38 @@ export function SmartFilterDeck({
   const isShanghai = cityMeta.id === 'shanghai';
   const priceOptions: Array<{ value: PriceCapOption; label: string }> = isShanghai
     ? [
-        { value: 'all', label: 'Any Price' },
-        { value: 'under25', label: `Under ${formatSessionPrice(80, 'CNY', true)}` },
-        { value: 'under18', label: `Under ${formatSessionPrice(50, 'CNY', true)}` },
+        { value: 'all', label: lang === 'zh' ? '不限票价' : 'Any Price' },
+        {
+          value: 'under25',
+          label:
+            lang === 'zh'
+              ? `${formatSessionPrice(80, 'CNY', true)} 以内`
+              : `Under ${formatSessionPrice(80, 'CNY', true)}`,
+        },
+        {
+          value: 'under18',
+          label:
+            lang === 'zh'
+              ? `${formatSessionPrice(50, 'CNY', true)} 以内`
+              : `Under ${formatSessionPrice(50, 'CNY', true)}`,
+        },
       ]
     : [
-        { value: 'all', label: 'Any Price' },
-        { value: 'under25', label: `Under ${formatSessionPrice(25, 'AUD', true)}` },
-        { value: 'under18', label: `Under ${formatSessionPrice(18, 'AUD', true)}` },
+        { value: 'all', label: lang === 'zh' ? '不限票价' : 'Any Price' },
+        {
+          value: 'under25',
+          label:
+            lang === 'zh'
+              ? `${formatSessionPrice(25, 'AUD', true)} 以内`
+              : `Under ${formatSessionPrice(25, 'AUD', true)}`,
+        },
+        {
+          value: 'under18',
+          label:
+            lang === 'zh'
+              ? `${formatSessionPrice(18, 'AUD', true)} 以内`
+              : `Under ${formatSessionPrice(18, 'AUD', true)}`,
+        },
       ];
 
   const handleCopyShareLink = async () => {
@@ -240,11 +264,17 @@ export function SmartFilterDeck({
                   <span className="date-chip__weekday">{topTag}</span>
                   <span className="date-chip__day">{parts.dayMonthShort}</span>
                   {!isShanghai && day.dayOfWeekIndex === 1 && (
-                    <span className="date-chip__deal-tag">Discount Mon</span>
+                    <span className="date-chip__deal-tag">
+                      {lang === 'zh' ? '周一特惠' : 'Discount Mon'}
+                    </span>
                   )}
                   {day.isCheapTuesday && (
                     <span className="date-chip__deal-tag">
-                      {isShanghai ? '周二半价 Tue' : 'Cheap Tue'}
+                      {lang === 'zh'
+                        ? '周二半价'
+                        : isShanghai
+                          ? '周二半价 Tue'
+                          : 'Cheap Tue'}
                     </span>
                   )}
                 </button>
@@ -263,9 +293,13 @@ export function SmartFilterDeck({
               onUpdateFilters({ searchQuery: sanitizeSearchQuery(e.target.value) })
             }
             placeholder={
-              isComingSoon
-                ? `Search upcoming titles, auteurs, chains, or ${cityMeta.name} houses…`
-                : `Search archive — film, auteur, chain, Chinese title, or ${cityMeta.name} suburb…`
+              lang === 'zh'
+                ? isComingSoon
+                  ? `搜索即将上映片名、导演、院线或 ${displayCityName} 影院…`
+                  : `搜索中英文片名、导演、演员、院线或 ${displayCityName} 商圈…`
+                : isComingSoon
+                  ? `Search upcoming titles, auteurs, chains, or ${cityMeta.name} houses…`
+                  : `Search archive — film, auteur, chain, Chinese title, or ${cityMeta.name} suburb…`
             }
             className="search-box__input"
             aria-label="Search films, directors, cinema chains, or suburbs"
@@ -293,7 +327,7 @@ export function SmartFilterDeck({
         >
           <label htmlFor="movie-direct-select" className="direct-select-box__label">
             <Film size={13} aria-hidden="true" />
-            <span>Film</span>
+            <span>{lang === 'zh' ? '影片' : 'Film'}</span>
           </label>
           <select
             id="movie-direct-select"
@@ -302,9 +336,13 @@ export function SmartFilterDeck({
             className="direct-select-box__select"
           >
             <option value="all">
-              {isComingSoon
-                ? `All Upcoming Films (${movieOptions.length})`
-                : `All Films (${movieOptions.length})`}
+              {lang === 'zh'
+                ? isComingSoon
+                  ? `全部即将上映 (${movieOptions.length} 部)`
+                  : `全部热映影片 (${movieOptions.length} 部)`
+                : isComingSoon
+                  ? `All Upcoming Films (${movieOptions.length})`
+                  : `All Films (${movieOptions.length})`}
             </option>
             {movieOptions.map((m) => (
               <option key={m.id} value={m.id}>
@@ -319,7 +357,7 @@ export function SmartFilterDeck({
               className="direct-select-box__clear"
               onClick={() => onUpdateFilters({ selectedMovieId: 'all' })}
               aria-label="Clear selected film"
-              title="Show all films"
+              title={lang === 'zh' ? '显示全部影片' : 'Show all films'}
             >
               <X size={13} />
             </button>
@@ -333,7 +371,7 @@ export function SmartFilterDeck({
         >
           <label htmlFor="cinema-direct-select" className="direct-select-box__label">
             <Building2 size={13} aria-hidden="true" />
-            <span>Cinema</span>
+            <span>{lang === 'zh' ? '影院' : 'Cinema'}</span>
           </label>
           <select
             id="cinema-direct-select"
@@ -342,12 +380,14 @@ export function SmartFilterDeck({
             className="direct-select-box__select"
           >
             <option value="all">
-              All {cityMeta.name} Cinemas ({cinemaOptions.length})
+              {lang === 'zh'
+                ? `全部${displayCityName.split(' ')[0]}影院 (${cinemaOptions.length} 家)`
+                : `All ${cityMeta.name} Cinemas (${cinemaOptions.length})`}
             </option>
             {cinemaOptions.map((c) => (
               <option key={c.id} value={c.id}>
                 {c.isFavorite ? '♥ ' : ''}
-                {c.name} — {c.suburb} · {formatDistanceKm(c.distanceKm)} ({c.chain})
+                {c.name} — {c.suburb} · {formatDistanceKm(c.distanceKm, lang)} ({c.chain})
               </option>
             ))}
           </select>
@@ -358,7 +398,7 @@ export function SmartFilterDeck({
               className="direct-select-box__clear"
               onClick={() => onUpdateFilters({ selectedCinemaId: 'all' })}
               aria-label="Clear selected cinema"
-              title="Show all cinemas"
+              title={lang === 'zh' ? '显示全部影院' : 'Show all cinemas'}
             >
               <X size={13} />
             </button>
@@ -372,7 +412,7 @@ export function SmartFilterDeck({
         >
           <label htmlFor="near-me-hub-select" className="direct-select-box__label">
             <MapPin size={13} aria-hidden="true" />
-            <span>Near Me</span>
+            <span>{lang === 'zh' ? '附近' : 'Near Me'}</span>
           </label>
           <select
             id="near-me-hub-select"
@@ -382,7 +422,9 @@ export function SmartFilterDeck({
             aria-label={`Sort cinemas by distance from ${cityMeta.name} neighborhood`}
           >
             {userOrigin.id === 'gps' && (
-              <option value="gps">📍 My Live GPS Location</option>
+              <option value="gps">
+                {lang === 'zh' ? '📍 我的实时 GPS 位置' : '📍 My Live GPS Location'}
+              </option>
             )}
             {userOrigin.id === 'custom' && (
               <option value="custom">📍 {userOrigin.label}</option>
@@ -403,11 +445,15 @@ export function SmartFilterDeck({
             }`}
             onClick={onRequestGps}
             disabled={gpsStatus === 'locating'}
-            title="Set My Location via GPS, postcode, suburb, or street address"
+            title={
+              lang === 'zh'
+                ? '通过 GPS、邮编、商圈或街道地址定位'
+                : 'Set My Location via GPS, postcode, suburb, or street address'
+            }
             aria-label="Open My Location finder"
           >
             <LocateFixed size={12} aria-hidden="true" />
-            <span>Locate</span>
+            <span>{lang === 'zh' ? '定位' : 'Locate'}</span>
           </button>
           {userOrigin.isCustomOrigin && (
             <button
@@ -520,7 +566,7 @@ export function SmartFilterDeck({
       <div className={isComingSoon ? 'filter-grid-single' : 'filter-grid-two'}>
         {!isComingSoon && (
           <div className="filter-row">
-            <span className="filter-row__label">Hour</span>
+            <span className="filter-row__label">{lang === 'zh' ? '时段' : 'Hour'}</span>
             <div className="chip-scroll" role="group" aria-label="Time of day">
               {TIME_BUCKETS.map((bucket) => {
                 const active = filters.timeOfDay === bucket.value;
@@ -534,7 +580,7 @@ export function SmartFilterDeck({
                     title={bucket.hint}
                     onClick={() => onUpdateFilters({ timeOfDay: bucket.value })}
                   >
-                    {bucket.label}
+                    {lang === 'zh' ? bucket.labelZh : bucket.label}
                   </button>
                 );
               })}
@@ -543,7 +589,7 @@ export function SmartFilterDeck({
         )}
 
         <div className="filter-row">
-          <span className="filter-row__label">Format</span>
+          <span className="filter-row__label">{lang === 'zh' ? '影厅制式' : 'Format'}</span>
           <div className="chip-scroll" role="group" aria-label="Screening format">
             {ALL_FORMATS.map((fmt) => {
               const active = filters.formats.includes(fmt);
@@ -569,14 +615,14 @@ export function SmartFilterDeck({
       <div className="filter-deck__bottom-bar">
         <div className="select-pair">
           <label className="inline-select">
-            <span className="inline-select__label">Genre</span>
+            <span className="inline-select__label">{lang === 'zh' ? '类型' : 'Genre'}</span>
             <select
               id="genre-filter-select"
               value={filters.genre}
               onChange={(e) => onUpdateFilters({ genre: e.target.value })}
               className="inline-select__control"
             >
-              <option value="all">All Genres</option>
+              <option value="all">{lang === 'zh' ? '全部类型' : 'All Genres'}</option>
               {genres.map((g) => (
                 <option key={g} value={g}>
                   {g}
@@ -586,7 +632,7 @@ export function SmartFilterDeck({
           </label>
 
           <label className="inline-select">
-            <span className="inline-select__label">Maison Vibe</span>
+            <span className="inline-select__label">{lang === 'zh' ? '影院风格' : 'Maison Vibe'}</span>
             <select
               id="vibe-filter-select"
               value={filters.vibe}
@@ -596,8 +642,8 @@ export function SmartFilterDeck({
               className="inline-select__control"
             >
               {VIBE_OPTIONS.map((v) => (
-                <option key={v} value={v}>
-                  {v === 'all' ? 'All Venue Vibes' : v}
+                <option key={v.value} value={v.value}>
+                  {lang === 'zh' ? v.labelZh : v.labelEn}
                 </option>
               ))}
             </select>
@@ -605,7 +651,7 @@ export function SmartFilterDeck({
 
           {!isComingSoon && (
             <label className="inline-select">
-              <span className="inline-select__label">Budget</span>
+              <span className="inline-select__label">{lang === 'zh' ? '预算' : 'Budget'}</span>
               <select
                 id="price-filter-select"
                 value={filters.priceCap}
@@ -625,7 +671,7 @@ export function SmartFilterDeck({
 
           {!isComingSoon && (
             <label className="inline-select">
-              <span className="inline-select__label">Finish By</span>
+              <span className="inline-select__label">{lang === 'zh' ? '散场时间' : 'Finish By'}</span>
               <select
                 id="finish-by-filter-select"
                 value={filters.finishBy}
@@ -633,11 +679,15 @@ export function SmartFilterDeck({
                   onUpdateFilters({ finishBy: e.target.value as FinishByOption })
                 }
                 className="inline-select__control"
-                title="Filter screenings by estimated finish time (including 15 minutes of trailers)"
+                title={
+                  lang === 'zh'
+                    ? '按预计散场时间筛选（含 15 分钟映前预告片）'
+                    : 'Filter screenings by estimated finish time (including 15 minutes of trailers)'
+                }
               >
                 {FINISH_BY_OPTIONS.map((opt) => (
                   <option key={opt.value} value={opt.value}>
-                    {opt.label}
+                    {lang === 'zh' ? opt.labelZh : opt.label}
                   </option>
                 ))}
               </select>
@@ -645,7 +695,7 @@ export function SmartFilterDeck({
           )}
 
           <label className="inline-select">
-            <span className="inline-select__label">Ratings</span>
+            <span className="inline-select__label">{lang === 'zh' ? '评分' : 'Ratings'}</span>
             <select
               id="rating-filter-select"
               value={filters.minRating}
@@ -656,7 +706,7 @@ export function SmartFilterDeck({
             >
               {RATING_OPTIONS.map((r) => (
                 <option key={r.value} value={r.value}>
-                  {r.label}
+                  {lang === 'zh' ? r.labelZh : r.label}
                 </option>
               ))}
             </select>
@@ -671,17 +721,25 @@ export function SmartFilterDeck({
               className={`deal-toggle ${filters.showPastToday ? 'deal-toggle--active' : ''}`}
               aria-pressed={filters.showPastToday}
               title={
-                filters.showPastToday
-                  ? 'Hide sessions that already started more than 15 minutes ago today'
-                  : 'Include earlier sessions from today that have already started'
+                lang === 'zh'
+                  ? filters.showPastToday
+                    ? '隐藏今日已开场超过 15 分钟的场次'
+                    : '展开今日已经开场的历史场次'
+                  : filters.showPastToday
+                    ? 'Hide sessions that already started more than 15 minutes ago today'
+                    : 'Include earlier sessions from today that have already started'
               }
               onClick={() => onUpdateFilters({ showPastToday: !filters.showPastToday })}
             >
               <Clock size={13} aria-hidden="true" />
               <span>
-                {filters.showPastToday
-                  ? 'Showing Past Today · Hide'
-                  : `Past Hidden (${hiddenPastTodayCount}) · Show`}
+                {lang === 'zh'
+                  ? filters.showPastToday
+                    ? '已展开过时场次 · 隐藏'
+                    : `已隐藏 ${hiddenPastTodayCount} 场过时 · 展开`
+                  : filters.showPastToday
+                    ? 'Showing Past Today · Hide'
+                    : `Past Hidden (${hiddenPastTodayCount}) · Show`}
               </span>
             </button>
           )}

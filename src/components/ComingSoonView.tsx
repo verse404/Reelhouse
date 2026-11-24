@@ -12,13 +12,27 @@ import {
   Sparkles,
   Train,
 } from 'lucide-react';
-import type { BrowseMode, Cinema, CityMeta, Movie, UpcomingVenuePreview } from '../types/cinema';
+import type {
+  AppLanguage,
+  BrowseMode,
+  Cinema,
+  CityMeta,
+  Movie,
+  UpcomingVenuePreview,
+} from '../types/cinema';
 import {
   formatAustralianReleaseDate,
   formatDistanceKm,
   formatRuntime,
   getDaysUntilRelease,
 } from '../utils/formatters';
+import {
+  getDisplayCinemaName,
+  getDisplayMovieSynopsis,
+  getDisplayMovieTagline,
+  getDisplayMovieTitle,
+  getUiText,
+} from '../utils/i18n';
 import { getCinemaDistanceInfo, type UserLocationOrigin } from '../utils/proximity';
 import { buildSafeGoogleMapsUrl, getSafeOutboundCinemaUrl } from '../utils/security';
 import { MoviePoster } from './MoviePoster';
@@ -35,6 +49,7 @@ export interface ComingSoonMovieItem {
 interface ComingSoonViewProps {
   items: ComingSoonMovieItem[];
   cityMeta: CityMeta;
+  lang?: AppLanguage;
   userOrigin: UserLocationOrigin;
   browseMode: BrowseMode;
   watchlistedIds: Set<string>;
@@ -52,6 +67,7 @@ type ComingSoonHouseSort = 'indie' | 'distance' | 'premieres';
 export function ComingSoonView({
   items,
   cityMeta,
+  lang = 'en',
   userOrigin,
   browseMode,
   watchlistedIds,
@@ -65,23 +81,40 @@ export function ComingSoonView({
   const [sortBy, setSortBy] = useState<ComingSoonSort>('release_date');
   const [houseSortBy, setHouseSortBy] = useState<ComingSoonHouseSort>('indie');
   const [watchlistOnly, setWatchlistOnly] = useState(false);
+  const t = getUiText(lang);
+  const displayCityName = t.cityNames[cityMeta.id] ?? cityMeta.name;
+  const isShanghai = cityMeta.id === 'shanghai';
+
+  // Defensively exclude any stale past-dated entries so old releases never display "RELEASING TODAY"
+  const upcomingOnlyItems = items.filter((item) => {
+    if (!item.movie.releaseDateIso) return true;
+    return getDaysUntilRelease(item.movie.releaseDateIso, cityMeta.timeZone) >= 0;
+  });
 
   const visibleItems = watchlistOnly
-    ? items.filter((item) => watchlistedIds.has(item.movie.id))
-    : items;
+    ? upcomingOnlyItems.filter((item) => watchlistedIds.has(item.movie.id))
+    : upcomingOnlyItems;
 
   if (visibleItems.length === 0) {
     return (
       <div className="empty-state" role="status">
         <h2 className="empty-state__title">
           {watchlistOnly
-            ? 'Your Coming Soon watchlist has no matches here'
-            : 'No forthcoming premieres match these filters'}
+            ? lang === 'zh'
+              ? '你的想看清单中暂无匹配新片'
+              : 'Your Coming Soon watchlist has no matches here'
+            : lang === 'zh'
+              ? '当前筛选条件下暂无即将上映影片'
+              : 'No forthcoming premieres match these filters'}
         </h2>
         <p className="empty-state__body">
           {watchlistOnly
-            ? 'Save upcoming titles using "+ Save to Watchlist", or view the full forthcoming season.'
-            : 'Restore the full archive to explore upcoming Melbourne and Sydney premieres, 35mm previews, and Boxing Day galas.'}
+            ? lang === 'zh'
+              ? '点击影片卡片上的「加入想看提醒」，或切回全部即将上映片单。'
+              : 'Save upcoming titles using "+ Save to Watchlist", or view the full forthcoming season.'
+            : lang === 'zh'
+              ? '重置筛选条件，浏览墨尔本、悉尼与上海即将上映的新片定档前瞻。'
+              : 'Restore the full archive to explore upcoming Melbourne, Sydney, and Shanghai premieres and advance engagements.'}
         </p>
         <div className="empty-state__actions">
           {watchlistOnly ? (
@@ -91,7 +124,7 @@ export function ComingSoonView({
               className="btn-primary"
               onClick={() => setWatchlistOnly(false)}
             >
-              View All Forthcoming Works
+              {lang === 'zh' ? '查看全部即将上映影片' : 'View All Forthcoming Works'}
             </button>
           ) : (
             <button
@@ -100,7 +133,7 @@ export function ComingSoonView({
               className="btn-primary"
               onClick={onResetFilters}
             >
-              Restore Full Archive
+              {lang === 'zh' ? '重置全部筛选' : 'Restore Full Archive'}
             </button>
           )}
         </div>
@@ -179,10 +212,13 @@ export function ComingSoonView({
       <section className="results-section" aria-label="Forthcoming premieres by cinema house">
         <div className="results-toolbar">
           <div className="results-toolbar__title-group">
-            <span className="results-toolbar__kicker">AVANT-PREMIÈRES BY MAISON</span>
+            <span className="results-toolbar__kicker">
+              {lang === 'zh' ? '按影院查看新片前瞻' : 'AVANT-PREMIÈRES BY MAISON'}
+            </span>
             <h2 className="results-toolbar__heading">
-              {houseGroups.length} {cityMeta.name}{' '}
-              {houseGroups.length === 1 ? 'House' : 'Houses'} Hosting Upcoming Premieres
+              {lang === 'zh'
+                ? `${displayCityName} ${houseGroups.length} 家预计排映新片影院`
+                : `${houseGroups.length} ${cityMeta.name} ${houseGroups.length === 1 ? 'House' : 'Houses'} Expected to Screen Upcoming Releases`}
             </h2>
           </div>
 
@@ -195,24 +231,36 @@ export function ComingSoonView({
               onClick={() => setWatchlistOnly((prev) => !prev)}
             >
               <Bell size={13} aria-hidden="true" />
-              <span>Saved Watchlist ({watchlistedIds.size})</span>
+              <span>
+                {lang === 'zh'
+                  ? `想看清单 (${watchlistedIds.size})`
+                  : `Saved Watchlist (${watchlistedIds.size})`}
+              </span>
             </button>
 
             <label className="inline-select">
-              <span className="inline-select__label">Order Venues</span>
+              <span className="inline-select__label">
+                {lang === 'zh' ? '影院排序' : 'Order Venues'}
+              </span>
               <select
                 id="cs-house-sort-select"
                 value={effectiveHouseSort}
                 onChange={(e) => setHouseSortBy(e.target.value as ComingSoonHouseSort)}
                 className="inline-select__control"
               >
-                <option value="indie">Heritage &amp; Indie First</option>
-                <option value="distance">
-                  {userOrigin.isCustomOrigin
-                    ? `Closest to ${userOrigin.id === 'gps' ? 'You' : userOrigin.shortLabel}`
-                    : 'Closest to CBD'}
+                <option value="indie">
+                  {lang === 'zh' ? '艺术与老牌影院优先' : 'Heritage & Indie First'}
                 </option>
-                <option value="premieres">Most Upcoming Premieres</option>
+                <option value="distance">
+                  {lang === 'zh'
+                    ? `距我最近 (${userOrigin.id === 'gps' ? '当前位置' : userOrigin.shortLabel})`
+                    : userOrigin.isCustomOrigin
+                      ? `Closest to ${userOrigin.id === 'gps' ? 'You' : userOrigin.shortLabel}`
+                      : 'Closest to CBD'}
+                </option>
+                <option value="premieres">
+                  {lang === 'zh' ? '预计新片最多' : 'Most Upcoming Premieres'}
+                </option>
               </select>
             </label>
           </div>
@@ -224,6 +272,7 @@ export function ComingSoonView({
             const googleMapsUrl = buildSafeGoogleMapsUrl(cinema.name, cinema.address);
             const isFav = favoriteCinemaIds.has(cinema.id);
             const dist = getCinemaDistanceInfo(cinema, userOrigin);
+            const displayCinema = getDisplayCinemaName(cinema, lang);
             return (
               <article
                 key={cinema.id}
@@ -237,10 +286,10 @@ export function ComingSoonView({
                       <span className="vibe-tag vibe-tag--prominent">{cinema.vibe}</span>
                       <span className="cinema-card__suburb">
                         <MapPin size={13} aria-hidden="true" />
-                        {cinema.suburb} · {formatDistanceKm(dist.km)} {dist.fullSuffix}
+                        {cinema.suburb} · {formatDistanceKm(dist.km, lang)} {dist.fullSuffix}
                       </span>
                     </div>
-                    <h3 className="cinema-card__name">{cinema.name}</h3>
+                    <h3 className="cinema-card__name">{displayCinema}</h3>
                     <p className="cinema-card__address">{cinema.address}</p>
                   </div>
 
@@ -257,7 +306,7 @@ export function ComingSoonView({
                         aria-hidden="true"
                         fill={isFav ? 'currentColor' : 'none'}
                       />
-                      <span>{isFav ? 'Favorited' : 'Favorite'}</span>
+                      <span>{isFav ? t.favorited : t.favorite}</span>
                     </button>
 
                     <a
@@ -268,7 +317,7 @@ export function ComingSoonView({
                       className="maps-action-btn"
                     >
                       <Navigation size={12} aria-hidden="true" />
-                      <span>Google Maps</span>
+                      <span>{t.googleMaps}</span>
                       <ExternalLink size={11} aria-hidden="true" />
                     </a>
                     {safeUrl && (
@@ -279,7 +328,7 @@ export function ComingSoonView({
                         id={`cs-cinema-site-${cinema.id}`}
                         className="venue-link"
                       >
-                        <span>Advance Bookings</span>
+                        <span>{lang === 'zh' ? '查询影院预售' : 'Check Venue Pre-Sales'}</span>
                         <ExternalLink size={12} aria-hidden="true" />
                       </a>
                     )}
@@ -290,8 +339,10 @@ export function ComingSoonView({
                   {entries.map(({ movie, preview }) => {
                     const saved = watchlistedIds.has(movie.id);
                     const releaseFormatted = movie.releaseDateIso
-                      ? formatAustralianReleaseDate(movie.releaseDateIso, cityMeta.timeZone)
-                      : 'Coming Soon';
+                      ? formatAustralianReleaseDate(movie.releaseDateIso, cityMeta.timeZone, lang)
+                      : lang === 'zh'
+                        ? '即将定档'
+                        : 'Coming Soon';
 
                     return (
                       <div key={movie.id} className="programme-film-row">
@@ -299,23 +350,24 @@ export function ComingSoonView({
                           <MoviePoster movie={movie} size="sm" />
                           <div>
                             <span className="coming-release-kicker">
-                              RELEASES {releaseFormatted.toUpperCase()}
+                              {lang === 'zh'
+                                ? `预计上映 · ${releaseFormatted}`
+                                : `RELEASES ${releaseFormatted.toUpperCase()}`}
                             </span>
                             <h4 className="programme-film-row__title">
-                              {cityMeta.id === 'shanghai' &&
-                              movie.ratings.douban.chineseTitle &&
-                              movie.ratings.douban.chineseTitle !== movie.title
-                                ? `${movie.title} · ${movie.ratings.douban.chineseTitle}`
-                                : movie.title}
+                              {getDisplayMovieTitle(movie, lang, isShanghai)}
                             </h4>
                             <p className="programme-film-row__meta">
                               <span className="rating-badge">{movie.classification}</span>
-                              <span>{formatRuntime(movie.runtimeMinutes)}</span>
-                              <span>Dir. {movie.director}</span>
+                              <span>{formatRuntime(movie.runtimeMinutes, lang)}</span>
+                              <span>
+                                {lang === 'zh' ? `导演：${movie.director}` : `Dir. ${movie.director}`}
+                              </span>
                             </p>
                             <div className="programme-film-row__ratings">
                               <RatingsPillBar
                                 movie={movie}
+                                lang={lang}
                                 compact
                                 contextKey={`cs-${cinema.id}`}
                                 onInspectRatings={onInspectRatings}
@@ -329,7 +381,7 @@ export function ComingSoonView({
                                   aria-label={`Watch official trailer for ${movie.title}`}
                                 >
                                   <Play size={10} aria-hidden="true" fill="currentColor" />
-                                  <span>Trailer</span>
+                                  <span>{t.trailer}</span>
                                 </button>
                               )}
                             </div>
@@ -350,7 +402,15 @@ export function ComingSoonView({
                             onClick={() => onToggleWatchlist(movie.id)}
                           >
                             {saved ? <Check size={13} /> : <Bell size={13} />}
-                            <span>{saved ? 'In Watchlist' : 'Watchlist'}</span>
+                            <span>
+                              {saved
+                                ? lang === 'zh'
+                                  ? '已加想看'
+                                  : 'In Watchlist'
+                                : lang === 'zh'
+                                  ? '想看提醒'
+                                  : 'Watchlist'}
+                            </span>
                           </button>
                         </div>
                       </div>
@@ -369,10 +429,13 @@ export function ComingSoonView({
     <section className="results-section" aria-label="Coming soon film premieres">
       <div className="results-toolbar">
         <div className="results-toolbar__title-group">
-          <span className="results-toolbar__kicker">PROCHAINEMENT · FORTHCOMING SEASON</span>
+          <span className="results-toolbar__kicker">
+            {lang === 'zh' ? '新片定档前瞻 · 即将上映' : 'PROCHAINEMENT · FORTHCOMING SEASON'}
+          </span>
           <h2 className="results-toolbar__heading">
-            {sortedMovies.length} {sortedMovies.length === 1 ? 'Premiere' : 'Premieres'} Coming to{' '}
-            {cityMeta.name}
+            {lang === 'zh'
+              ? `${displayCityName}即将上映 ${sortedMovies.length} 部新片`
+              : `${sortedMovies.length} ${sortedMovies.length === 1 ? 'Premiere' : 'Premieres'} Coming to ${cityMeta.name}`}
           </h2>
         </div>
 
@@ -385,21 +448,33 @@ export function ComingSoonView({
             onClick={() => setWatchlistOnly((prev) => !prev)}
           >
             <Bell size={13} aria-hidden="true" />
-            <span>Saved Watchlist ({watchlistedIds.size})</span>
+            <span>
+              {lang === 'zh'
+                ? `想看清单 (${watchlistedIds.size})`
+                : `Saved Watchlist (${watchlistedIds.size})`}
+            </span>
           </button>
 
           <label className="inline-select">
-            <span className="inline-select__label">Order</span>
+            <span className="inline-select__label">{lang === 'zh' ? '排序' : 'Order'}</span>
             <select
               id="coming-soon-sort-select"
               value={sortBy}
               onChange={(e) => setSortBy(e.target.value as ComingSoonSort)}
               className="inline-select__control"
             >
-              <option value="release_date">Chronological Release</option>
-              <option value="imdb">Festival Buzz — IMDb</option>
-              <option value="rt">Festival Buzz — Rotten Tomatoes</option>
-              <option value="douban">Festival Buzz — Douban (豆瓣)</option>
+              <option value="release_date">
+                {lang === 'zh' ? '按上映日期先后' : 'Chronological Release'}
+              </option>
+              <option value="imdb">
+                {lang === 'zh' ? 'IMDb 热度评分优先' : 'Festival Buzz — IMDb'}
+              </option>
+              <option value="rt">
+                {lang === 'zh' ? '烂番茄口碑优先' : 'Festival Buzz — Rotten Tomatoes'}
+              </option>
+              <option value="douban">
+                {lang === 'zh' ? '豆瓣口碑优先' : 'Festival Buzz — Douban (豆瓣)'}
+              </option>
             </select>
           </label>
         </div>
@@ -409,12 +484,17 @@ export function ComingSoonView({
         {sortedMovies.map(({ movie, cityVenues }, index) => {
           const catalogNumber = String(index + 1).padStart(2, '0');
           const releaseFormatted = movie.releaseDateIso
-            ? formatAustralianReleaseDate(movie.releaseDateIso, cityMeta.timeZone)
-            : 'Forthcoming';
+            ? formatAustralianReleaseDate(movie.releaseDateIso, cityMeta.timeZone, lang)
+            : lang === 'zh'
+              ? '即将上映'
+              : 'Forthcoming';
           const daysUntil = movie.releaseDateIso
             ? getDaysUntilRelease(movie.releaseDateIso, cityMeta.timeZone)
             : null;
           const isSaved = watchlistedIds.has(movie.id);
+          const displayTitle = getDisplayMovieTitle(movie, lang, isShanghai);
+          const displayTagline = getDisplayMovieTagline(movie, lang);
+          const displaySynopsis = getDisplayMovieSynopsis(movie, lang);
 
           return (
             <article key={movie.id} className="movie-card" id={`coming-soon-card-${movie.id}`}>
@@ -432,9 +512,15 @@ export function ComingSoonView({
                       <Calendar size={12} aria-hidden="true" />
                       {releaseFormatted}
                     </span>
-                    {daysUntil !== null && (
+                    {daysUntil !== null && daysUntil >= 0 && (
                       <span className="cs-countdown-tag">
-                        {daysUntil === 0 ? 'RELEASING TODAY' : `IN ${daysUntil} DAYS`}
+                        {daysUntil === 0
+                          ? lang === 'zh'
+                            ? '今日上映'
+                            : 'RELEASING TODAY'
+                          : lang === 'zh'
+                            ? `${daysUntil} 天后上映`
+                            : `IN ${daysUntil} ${daysUntil === 1 ? 'DAY' : 'DAYS'}`}
                       </span>
                     )}
                     {movie.releaseOccasion && (
@@ -446,7 +532,11 @@ export function ComingSoonView({
                   </div>
 
                   <div className="movie-card__badges">
-                    <span className="auteur-credit">A FILM BY {movie.director.toUpperCase()}</span>
+                    <span className="auteur-credit">
+                      {lang === 'zh'
+                        ? `导演：${movie.director}`
+                        : `A FILM BY ${movie.director.toUpperCase()}`}
+                    </span>
                     <span
                       className={`rating-badge rating-badge--${movie.classification
                         .toLowerCase()
@@ -456,18 +546,12 @@ export function ComingSoonView({
                     </span>
                     <span className="meta-inline">
                       <Clock size={12} aria-hidden="true" />
-                      {formatRuntime(movie.runtimeMinutes)}
+                      {formatRuntime(movie.runtimeMinutes, lang)}
                     </span>
                   </div>
 
-                  <h3 className="movie-card__title">
-                    {cityMeta.id === 'shanghai' &&
-                    movie.ratings.douban.chineseTitle &&
-                    movie.ratings.douban.chineseTitle !== movie.title
-                      ? `${movie.title} · ${movie.ratings.douban.chineseTitle}`
-                      : movie.title}
-                  </h3>
-                  <p className="movie-card__epigraph">“{movie.tagline}”</p>
+                  <h3 className="movie-card__title">{displayTitle}</h3>
+                  <p className="movie-card__epigraph">“{displayTagline}”</p>
 
                   <p className="movie-card__byline">
                     {movie.genres.join(' · ')} — {movie.languageNote} ({movie.countryOrigin},{' '}
@@ -475,7 +559,11 @@ export function ComingSoonView({
                   </p>
 
                   <div className="movie-card__ratings-row">
-                    <RatingsPillBar movie={movie} onInspectRatings={onInspectRatings} />
+                    <RatingsPillBar
+                      movie={movie}
+                      lang={lang}
+                      onInspectRatings={onInspectRatings}
+                    />
                     {movie.trailerYoutubeKey && (
                       <button
                         type="button"
@@ -485,15 +573,15 @@ export function ComingSoonView({
                         aria-label={`Watch official trailer for ${movie.title}`}
                       >
                         <Play size={11} aria-hidden="true" fill="currentColor" />
-                        <span>Watch Trailer</span>
+                        <span>{t.watchTrailer}</span>
                       </button>
                     )}
                   </div>
 
-                  <p className="movie-card__synopsis">{movie.synopsis}</p>
+                  <p className="movie-card__synopsis">{displaySynopsis}</p>
 
                   <p className="movie-card__cast">
-                    <span>FEATURING</span> {movie.castLead.join(' · ')}
+                    <span>{lang === 'zh' ? '主演' : 'FEATURING'}</span> {movie.castLead.join(' · ')}
                   </p>
 
                   {movie.editorialPickReason && (
@@ -509,7 +597,15 @@ export function ComingSoonView({
                       onClick={() => onToggleWatchlist(movie.id)}
                     >
                       {isSaved ? <Check size={14} /> : <Bell size={14} />}
-                      <span>{isSaved ? 'Saved in Watchlist' : 'Save to Watchlist'}</span>
+                      <span>
+                        {isSaved
+                          ? lang === 'zh'
+                            ? '已加入想看清单'
+                            : 'Saved in Watchlist'
+                          : lang === 'zh'
+                            ? '加入想看提醒'
+                            : 'Save to Watchlist'}
+                      </span>
                     </button>
                   </div>
                 </div>
@@ -518,11 +614,14 @@ export function ComingSoonView({
               <div className="movie-card__venues-col">
                 <div className="venues-header">
                   <span>
-                    {cityVenues.length} CONFIRMED {cityMeta.name.toUpperCase()}{' '}
-                    {cityVenues.length === 1 ? 'MAISON' : 'MAISONS'}
+                    {lang === 'zh'
+                      ? `${cityVenues.length} 家预计排映影院`
+                      : `${cityVenues.length} EXPECTED ${cityMeta.name.toUpperCase()} ${cityVenues.length === 1 ? 'MAISON' : 'MAISONS'}`}
                   </span>
                   <span className="venues-header__hint">
-                    Advance gala previews &amp; opening engagements
+                    {lang === 'zh'
+                      ? '基于院线排映习惯预测 · 请以影院官方预售为准'
+                      : 'Projected release venues — check official box office for pre-sales'}
                   </span>
                 </div>
 
@@ -532,6 +631,7 @@ export function ComingSoonView({
                     const googleMapsUrl = buildSafeGoogleMapsUrl(cinema.name, cinema.address);
                     const isFav = favoriteCinemaIds.has(cinema.id);
                     const dist = getCinemaDistanceInfo(cinema, userOrigin);
+                    const displayCinema = getDisplayCinemaName(cinema, lang);
 
                     return (
                       <div key={cinema.id} className="venue-schedule-row">
@@ -544,8 +644,8 @@ export function ComingSoonView({
                               aria-pressed={isFav}
                               aria-label={
                                 isFav
-                                  ? `Remove ${cinema.name} from favorites`
-                                  : `Add ${cinema.name} to favorites`
+                                  ? `Remove ${displayCinema} from favorites`
+                                  : `Add ${displayCinema} to favorites`
                               }
                               onClick={() => onToggleFavoriteCinema(cinema.id)}
                             >
@@ -555,7 +655,7 @@ export function ComingSoonView({
                                 fill={isFav ? 'currentColor' : 'none'}
                               />
                             </button>
-                            <h4 className="venue-schedule-row__name">{cinema.name}</h4>
+                            <h4 className="venue-schedule-row__name">{displayCinema}</h4>
                             <span className="chain-tag chain-tag--compact">{cinema.chain}</span>
                             <span className="vibe-tag">{cinema.vibe}</span>
                           </div>
@@ -564,7 +664,7 @@ export function ComingSoonView({
                             <span>{cinema.suburb}</span>
                             <span aria-hidden="true">—</span>
                             <span>
-                              {formatDistanceKm(dist.km)} {dist.compactSuffix}
+                              {formatDistanceKm(dist.km, lang)} {dist.compactSuffix}
                             </span>
                           </p>
                           <p className="venue-schedule-row__transit">
@@ -580,7 +680,7 @@ export function ComingSoonView({
                               className="maps-inline-btn"
                             >
                               <Navigation size={11} aria-hidden="true" />
-                              <span>Google Maps</span>
+                              <span>{t.googleMaps}</span>
                               <ExternalLink size={10} aria-hidden="true" />
                             </a>
                           </div>
@@ -599,7 +699,11 @@ export function ComingSoonView({
                               id={`cs-advance-link-${movie.id}-${cinema.id}`}
                               className="venue-link"
                             >
-                              <span>Enquire / Pre-Book at Venue</span>
+                              <span>
+                                {lang === 'zh'
+                                  ? '查看影院预售动态'
+                                  : 'Check Venue Pre-Sales'}
+                              </span>
                               <ExternalLink size={11} aria-hidden="true" />
                             </a>
                           )}

@@ -82,19 +82,31 @@ export function MovieBrowseView({
       <div className="empty-state" role="status">
         <h2 className="empty-state__title">
           {favoritesOnlyActive
-            ? 'No screenings at your favorite cinemas match this selection'
+            ? lang === 'zh'
+              ? '你收藏的影院暂无符合当前筛选的排片'
+              : 'No screenings at your favorite cinemas match this selection'
             : hiddenPastTodayCount > 0
-              ? 'Remaining screenings for today have already begun'
-              : 'No screenings match the current selection'}
+              ? lang === 'zh'
+                ? '今天余下的匹配场次均已开场'
+                : 'Remaining screenings for today have already begun'
+              : lang === 'zh'
+                ? '当前筛选条件下暂无排片'
+                : 'No screenings match the current selection'}
         </h2>
         <p className="empty-state__body">
           {favoritesOnlyActive
-            ? 'Tap the heart icon next to any cinema name to add favorite houses, or restore the full archive to browse every venue.'
+            ? lang === 'zh'
+              ? '点击任意影院旁的心形图标即可收藏常去影院，或点击下方重置筛选浏览全城影院。'
+              : 'Tap the heart icon next to any cinema name to add favorite houses, or restore the full archive to browse every venue.'
             : hiddenPastTodayCount > 0
-              ? `${hiddenPastTodayCount} matching ${
-                  hiddenPastTodayCount === 1 ? 'session has' : 'sessions have'
-                } already started earlier today — select Tomorrow or another date above, or reveal earlier sessions.`
-              : 'Refine your chain, precinct, format, or critical reception thresholds—or step directly into Tuesday’s salon concessions across town.'}
+              ? lang === 'zh'
+                ? `今天早些时候已有 ${hiddenPastTodayCount} 场匹配排片开场 — 可切换到明天或其他日期，或展开今日历史场次。`
+                : `${hiddenPastTodayCount} matching ${
+                    hiddenPastTodayCount === 1 ? 'session has' : 'sessions have'
+                  } already started earlier today — select Tomorrow or another date above, or reveal earlier sessions.`
+              : lang === 'zh'
+                ? '可放宽院线、商圈、制式或评分筛选条件，或直接查看周二特惠排片。'
+                : 'Refine your chain, precinct, format, or critical reception thresholds—or step directly into Tuesday’s salon concessions across town.'}
         </p>
         <div className="empty-state__actions">
           {hiddenPastTodayCount > 0 && (
@@ -104,7 +116,9 @@ export function MovieBrowseView({
               className="btn-secondary"
               onClick={onShowPastToday}
             >
-              Show Earlier Today ({hiddenPastTodayCount})
+              {lang === 'zh'
+                ? `显示今日已开场场次 (${hiddenPastTodayCount})`
+                : `Show Earlier Today (${hiddenPastTodayCount})`}
             </button>
           )}
           <button
@@ -113,7 +127,7 @@ export function MovieBrowseView({
             className="btn-primary"
             onClick={onResetFilters}
           >
-            Restore Full Archive
+            {lang === 'zh' ? '重置全部筛选' : 'Restore Full Archive'}
           </button>
           {cheapTuesdayIso && (
             <button
@@ -122,7 +136,7 @@ export function MovieBrowseView({
               className="btn-secondary"
               onClick={onJumpToCheapTuesday}
             >
-              View Cheap Tuesday
+              {lang === 'zh' ? '查看周二半价场' : 'View Cheap Tuesday'}
             </button>
           )}
         </div>
@@ -201,7 +215,11 @@ export function MovieBrowseView({
 
                 <div className="movie-card__details">
                   <div className="movie-card__badges">
-                    <span className="auteur-credit">A FILM BY {movie.director.toUpperCase()}</span>
+                    <span className="auteur-credit">
+                      {lang === 'zh'
+                        ? `导演：${movie.director}`
+                        : `A FILM BY ${movie.director.toUpperCase()}`}
+                    </span>
                     <span
                       className={`rating-badge rating-badge--${movie.classification
                         .toLowerCase()
@@ -211,7 +229,7 @@ export function MovieBrowseView({
                     </span>
                     <span className="meta-inline">
                       <Clock size={12} aria-hidden="true" />
-                      {formatRuntime(movie.runtimeMinutes)}
+                      {formatRuntime(movie.runtimeMinutes, lang)}
                     </span>
                   </div>
 
@@ -224,7 +242,11 @@ export function MovieBrowseView({
                   </p>
 
                   <div className="movie-card__ratings-row">
-                    <RatingsPillBar movie={movie} onInspectRatings={onInspectRatings} />
+                    <RatingsPillBar
+                      movie={movie}
+                      lang={lang}
+                      onInspectRatings={onInspectRatings}
+                    />
                     {movie.trailerYoutubeKey && (
                       <button
                         type="button"
@@ -242,7 +264,7 @@ export function MovieBrowseView({
                   <p className="movie-card__synopsis">{displaySynopsis}</p>
 
                   <p className="movie-card__cast">
-                    <span>FEATURING</span> {movie.castLead.join(' · ')}
+                    <span>{lang === 'zh' ? '主演' : 'FEATURING'}</span> {movie.castLead.join(' · ')}
                   </p>
 
                   {movie.editorialPickReason && (

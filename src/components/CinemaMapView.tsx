@@ -52,7 +52,6 @@ interface CinemaMapViewProps {
 const TILE_SIZE = 256;
 const MIN_ZOOM = 10;
 const MAX_ZOOM = 16;
-const SUBDOMAINS = ['a', 'b', 'c'];
 
 function lngToWorldX(lng: number, zoom: number): number {
   return ((lng + 180) / 360) * TILE_SIZE * Math.pow(2, zoom);
@@ -200,14 +199,16 @@ export function CinemaMapView({
   const startTileY = Math.max(0, Math.floor(topLeftWorldY / TILE_SIZE));
   const endTileY = Math.min(maxTileIndex, Math.floor((topLeftWorldY + viewport.height) / TILE_SIZE));
 
-  const tileStyle = edition === 'ivoire' ? 'light_all' : 'dark_all';
-  const tiles: Array<{ key: string; url: string; left: number; top: number }> = [];
+  const isLightTheme = edition === 'ivoire';
+  const baseService = isLightTheme ? 'World_Light_Gray_Base' : 'World_Dark_Gray_Base';
+  const refService = isLightTheme ? 'World_Light_Gray_Reference' : 'World_Dark_Gray_Reference';
+  const tiles: Array<{ key: string; baseUrl: string; refUrl: string; left: number; top: number }> = [];
   for (let tx = startTileX; tx <= endTileX; tx++) {
     for (let ty = startTileY; ty <= endTileY; ty++) {
-      const sub = SUBDOMAINS[Math.abs(tx + ty) % SUBDOMAINS.length];
       tiles.push({
-        key: `${tileStyle}-${zoom}-${tx}-${ty}`,
-        url: `https://${sub}.basemaps.cartocdn.com/${tileStyle}/${zoom}/${tx}/${ty}@2x.png`,
+        key: `${baseService}-${zoom}-${tx}-${ty}`,
+        baseUrl: `https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/${baseService}/MapServer/tile/${zoom}/${ty}/${tx}`,
+        refUrl: `https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/${refService}/MapServer/tile/${zoom}/${ty}/${tx}`,
         left: Math.round(tx * TILE_SIZE - topLeftWorldX),
         top: Math.round(ty * TILE_SIZE - topLeftWorldY),
       });
@@ -249,32 +250,43 @@ export function CinemaMapView({
     <section className="cinema-map-section" aria-label={`${cityMeta.name} interactive cinema map`}>
       <div className="results-toolbar">
         <div className="results-toolbar__title-group">
-          <span className="results-toolbar__kicker">CARTOGRAPHIE CINÉMATOGRAPHIQUE</span>
+          <span className="results-toolbar__kicker">
+            {lang === 'zh' ? '全城影院分布地图' : 'CARTOGRAPHIE CINÉMATOGRAPHIQUE'}
+          </span>
           <h2 className="results-toolbar__heading">
-            {rankedVenues.filter((v) => v.totalSessions > 0).length} of {rankedVenues.length}{' '}
-            {cityMeta.name} Cinemas Screening
+            {lang === 'zh'
+              ? `${t.cityNames[cityMeta.id] ?? cityMeta.name} ${rankedVenues.filter((v) => v.totalSessions > 0).length} / ${rankedVenues.length} 家影院有排片`
+              : `${rankedVenues.filter((v) => v.totalSessions > 0).length} of ${rankedVenues.length} ${cityMeta.name} Cinemas Screening`}
           </h2>
         </div>
 
         <div className="map-toolbar-actions">
           <button
             type="button"
-            className={`format-chip ${showRings ? 'format-chip--active' : ''}`}
+            className={`deal-toggle ${showRings ? 'deal-toggle--active' : ''}`}
             onClick={() => setShowRings((r) => !r)}
             aria-pressed={showRings}
           >
             <Compass size={12} aria-hidden="true" />
-            <span>Distance Rings (1 · 3 · 5 km)</span>
+            <span>
+              {lang === 'zh' ? '距离圈 (1 · 3 · 5 公里)' : 'Distance Rings (1 · 3 · 5 km)'}
+            </span>
           </button>
 
           <button
             type="button"
-            className="format-chip"
+            className={`deal-toggle ${userOrigin.isCustomOrigin ? 'deal-toggle--active' : ''}`}
             onClick={onOpenLocationModal}
           >
             <LocateFixed size={12} aria-hidden="true" />
             <span>
-              {userOrigin.isCustomOrigin ? `Origin: ${userOrigin.shortLabel}` : 'Set My Location'}
+              {userOrigin.isCustomOrigin
+                ? lang === 'zh'
+                  ? `起点：${userOrigin.shortLabel}`
+                  : `Origin: ${userOrigin.shortLabel}`
+                : lang === 'zh'
+                  ? '定位我的位置'
+                  : 'Set My Location'}
             </span>
           </button>
         </div>
@@ -322,15 +334,30 @@ export function CinemaMapView({
               }
             }}
           >
-            {/* Raster Map Tiles */}
+            {/* Raster Map Tiles (Esri Canvas Base + Crisp Reference Street/District Labels) */}
             <div className="cinema-map-tiles" aria-hidden="true">
               {tiles.map((t) => (
                 <img
-                  key={t.key}
-                  src={t.url}
+                  key={`${t.key}-base`}
+                  src={t.baseUrl}
                   alt=""
                   draggable={false}
                   className="cinema-map-tile"
+                  style={{
+                    left: `${t.left}px`,
+                    top: `${t.top}px`,
+                    width: `${TILE_SIZE}px`,
+                    height: `${TILE_SIZE}px`,
+                  }}
+                />
+              ))}
+              {tiles.map((t) => (
+                <img
+                  key={`${t.key}-ref`}
+                  src={t.refUrl}
+                  alt=""
+                  draggable={false}
+                  className="cinema-map-tile cinema-map-tile--ref"
                   style={{
                     left: `${t.left}px`,
                     top: `${t.top}px`,
@@ -424,8 +451,10 @@ export function CinemaMapView({
                     {isFav ? '♥ ' : ''}
                     {totalSessions}
                   </span>
-                  { (zoom >= 13 || isSelected || isClosest) && (
-                    <span className="cinema-map-pin__label">{cinema.name}</span>
+                  {(zoom >= 13 || isSelected || isClosest) && (
+                    <span className="cinema-map-pin__label">
+                      {getDisplayCinemaName(cinema, lang)}
+                    </span>
                   )}
                 </button>
               );
@@ -438,8 +467,8 @@ export function CinemaMapView({
                 className="cinema-map-ctrl-btn"
                 onClick={() => updateCamera(centerLat, centerLng, zoom + 1)}
                 disabled={zoom >= MAX_ZOOM}
-                aria-label="Zoom in"
-                title="Zoom in"
+                aria-label={lang === 'zh' ? '放大地图' : 'Zoom in'}
+                title={lang === 'zh' ? '放大地图' : 'Zoom in'}
               >
                 <Plus size={15} />
               </button>
@@ -448,8 +477,8 @@ export function CinemaMapView({
                 className="cinema-map-ctrl-btn"
                 onClick={() => updateCamera(centerLat, centerLng, zoom - 1)}
                 disabled={zoom <= MIN_ZOOM}
-                aria-label="Zoom out"
-                title="Zoom out"
+                aria-label={lang === 'zh' ? '缩小地图' : 'Zoom out'}
+                title={lang === 'zh' ? '缩小地图' : 'Zoom out'}
               >
                 <Minus size={15} />
               </button>
@@ -459,8 +488,8 @@ export function CinemaMapView({
                 onClick={() =>
                   updateCamera(userOrigin.lat, userOrigin.lng, userOrigin.isCustomOrigin ? 13 : 12)
                 }
-                aria-label="Center on active location"
-                title="Center on My Location / CBD"
+                aria-label={lang === 'zh' ? '回到当前位置' : 'Center on active location'}
+                title={lang === 'zh' ? '回到当前位置 / 市中心' : 'Center on My Location / CBD'}
               >
                 <LocateFixed size={14} />
               </button>
@@ -468,15 +497,23 @@ export function CinemaMapView({
                 type="button"
                 className="cinema-map-ctrl-btn"
                 onClick={handleFitCityVenues}
-                aria-label={`Show all ${cityMeta.name} cinemas`}
-                title={`Fit all ${cityMeta.name} cinemas`}
+                aria-label={
+                  lang === 'zh'
+                    ? `查看全城所有影院`
+                    : `Show all ${cityMeta.name} cinemas`
+                }
+                title={
+                  lang === 'zh'
+                    ? `适配显示全城所有影院`
+                    : `Fit all ${cityMeta.name} cinemas`
+                }
               >
                 <Maximize2 size={14} />
               </button>
             </div>
 
             <div className="cinema-map-attribution" aria-hidden="true">
-              © OpenStreetMap · © CARTO
+              © Esri, HERE, Garmin · OpenStreetMap
             </div>
           </div>
 
@@ -495,8 +532,12 @@ export function CinemaMapView({
                   }}
                 >
                   <span className="map-quick-pill__rank">#{idx + 1}</span>
-                  <span className="map-quick-pill__name">{v.cinema.name}</span>
-                  <span className="map-quick-pill__km">{formatDistanceKm(v.dist.km)}</span>
+                  <span className="map-quick-pill__name">
+                    {getDisplayCinemaName(v.cinema, lang)}
+                  </span>
+                  <span className="map-quick-pill__km">
+                    {formatDistanceKm(v.dist.km, lang)}
+                  </span>
                 </button>
               );
             })}
@@ -511,7 +552,9 @@ export function CinemaMapView({
                 <span className="chain-tag">{activeSelectedVenue.cinema.chain}</span>
                 <span className="vibe-tag">{activeSelectedVenue.cinema.vibe}</span>
                 {closestVenueId === activeSelectedVenue.cinema.id && userOrigin.isCustomOrigin && (
-                  <span className="closest-rank-pill">#1 CLOSEST</span>
+                  <span className="closest-rank-pill">
+                    {lang === 'zh' ? '#1 最近影院' : '#1 CLOSEST'}
+                  </span>
                 )}
               </div>
 
@@ -521,7 +564,7 @@ export function CinemaMapView({
               <p className="cinema-map-inspector__sub">
                 {activeSelectedVenue.cinema.suburb} ·{' '}
                 <strong>
-                  {formatDistanceKm(activeSelectedVenue.dist.km)}{' '}
+                  {formatDistanceKm(activeSelectedVenue.dist.km, lang)}{' '}
                   {activeSelectedVenue.dist.compactSuffix}
                 </strong>
               </p>
@@ -593,8 +636,9 @@ export function CinemaMapView({
             <div className="cinema-map-inspector__sessions">
               {activeSelectedVenue.movies.length === 0 ? (
                 <p className="cinema-map-inspector__empty">
-                  No remaining sessions match your active date/time filters at this cinema — pick
-                  another day above or reset filters to view its full schedule.
+                  {lang === 'zh'
+                    ? '当前筛选条件或今日余下时段该影院暂无排片 — 可在上方切换其他日期或重置筛选查看完整排片。'
+                    : 'No remaining sessions match your active date/time filters at this cinema — pick another day above or reset filters to view its full schedule.'}
                 </p>
               ) : (
                 activeSelectedVenue.movies.map(({ movie, sessions }) => (
@@ -609,12 +653,13 @@ export function CinemaMapView({
                           <span className="rating-badge">{movie.classification}</span>
                           <span>
                             <Clock size={11} aria-hidden="true" />{' '}
-                            {formatRuntime(movie.runtimeMinutes)}
+                            {formatRuntime(movie.runtimeMinutes, lang)}
                           </span>
                         </p>
                         <div className="programme-film-row__ratings">
                           <RatingsPillBar
                             movie={movie}
+                            lang={lang}
                             compact
                             contextKey={`map-${activeSelectedVenue.cinema.id}`}
                             onInspectRatings={onInspectRatings}

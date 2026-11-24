@@ -88,8 +88,9 @@
 
 .couture-tabs {
   display: inline-flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 1.15rem;
+  gap: 0.75rem 1.15rem;
 }
 
 .couture-tab {
@@ -106,6 +107,7 @@
   display: inline-flex;
   align-items: baseline;
   gap: 0.35rem;
+  white-space: nowrap;
   transition: color 0.2s ease;
 }
 
@@ -114,6 +116,7 @@
   font-size: 0.65rem;
   letter-spacing: 0.08em;
   color: var(--accent-amber);
+  white-space: nowrap;
 }
 
 .couture-tab:hover {
@@ -135,8 +138,9 @@
 
 .header-actions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 0.85rem;
+  gap: 0.55rem 0.75rem;
 }
 
 .header-session-tally {
@@ -144,6 +148,7 @@
   font-style: italic;
   font-size: 0.96rem;
   color: var(--ink-muted);
+  white-space: nowrap;
 }
 
 .edition-toggle {
@@ -159,6 +164,7 @@
   letter-spacing: 0.18em;
   text-transform: uppercase;
   color: var(--ink-secondary);
+  white-space: nowrap;
   transition: border-color 0.2s ease, color 0.2s ease, background-color 0.2s ease;
 }
 
@@ -179,6 +185,7 @@
   font-weight: 500;
   letter-spacing: 0.18em;
   text-transform: uppercase;
+  white-space: nowrap;
   transition: border-color 0.2s ease, background-color 0.2s ease;
 }
 
@@ -4156,4 +4163,196 @@
   flex-wrap: wrap;
   gap: 0.4rem;
 }
+
+/* ==========================================================================
+   Sticky Header Scroll Offsets, Map Layers, ZH Typography & Mobile Overflow Guards
+   ========================================================================== */
+
+.movie-card,
+.cinema-card,
+.cinema-map-section,
+.results-section,
+.closest-radar {
+  scroll-margin-top: 175px;
+}
+
+.cinema-map-tile--ref {
+  pointer-events: none;
+  z-index: 1;
+}
+
+.cinema-map-attribution {
+  left: 0.6rem;
+  right: auto;
+  pointer-events: none;
+}
+
+html[lang='zh-CN'] .editorial-masthead__title {
+  font-size: clamp(2rem, 4vw, 3.45rem);
+  line-height: 1.18;
+  letter-spacing: -0.01em;
+}
+
+/* Prevent CSS Grid minmax(auto, 1fr) children from forcing horizontal scroll on mobile */
+.editorial-masthead__grid > *,
+.curated-triptych > *,
+.curated-triptych__plates > *,
+.filter-deck__top-bar > *,
+.direct-select-grid > *,
+.filter-grid-two > *,
+.movie-card > *,
+.cinema-map-layout > *,
+.cinema-map-stage-wrap {
+  min-width: 0;
+}
+
+@media (max-width: 1020px) {
+  .editorial-masthead__grid,
+  .curated-triptych,
+  .filter-deck__top-bar,
+  .filter-grid-two,
+  .movie-card,
+  .direct-select-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 720px) {
+  .site-header {
+    position: static;
+  }
+
+  .movie-card,
+  .cinema-card,
+  .cinema-map-section,
+  .results-section,
+  .closest-radar {
+    scroll-margin-top: 20px;
+  }
+
+  .site-header__inner {
+    padding-inline: 1rem;
+    padding-block: 0.75rem;
+    gap: 0.65rem 1rem;
+  }
+
+  .main-container {
+    padding-inline: 1rem;
+  }
+
+  .brand-lockup {
+    gap: 0.55rem;
+    max-width: 100%;
+  }
+
+  .brand-lockup__name {
+    font-size: 1.05rem;
+    letter-spacing: 0.2em;
+  }
+
+  .brand-lockup__sub {
+    font-size: 0.88rem;
+  }
+
+  .header-controls {
+    width: 100%;
+    gap: 0.55rem 0.9rem;
+  }
+
+  .header-rule-v {
+    display: none;
+  }
+
+  .couture-tabs {
+    gap: 0.45rem 0.85rem;
+  }
+
+  .couture-tab {
+    font-size: 0.68rem;
+    letter-spacing: 0.13em;
+  }
+
+  .header-actions {
+    width: 100%;
+    gap: 0.45rem;
+  }
+
+  .edition-toggle,
+  .shortlist-trigger {
+    padding-inline: 0.58rem;
+    padding-block: 0.34rem;
+    font-size: 0.64rem;
+    letter-spacing: 0.12em;
+  }
+
+  .header-session-tally {
+    font-size: 0.85rem;
+    margin-inline-end: 0.15rem;
+  }
+
+  .editorial-masthead {
+    padding-block: 1.4rem 1.5rem;
+  }
+
+  .editorial-masthead__title {
+    font-size: clamp(1.95rem, 8.5vw, 2.6rem);
+  }
+
+  .salon-visual-frame__caption {
+    flex-direction: column;
+    gap: 0.2rem;
+  }
+
+  .curated-triptych__plates {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .triptych-plate {
+    width: 100%;
+    padding: 0.65rem 0.75rem;
+  }
+
+  .filter-deck {
+    padding: 0.9rem;
+  }
+
+  .select-pair {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .direct-select-box,
+  .filter-row,
+  .filter-row > *,
+  .chip-scroll,
+  .date-strip {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .direct-select-box__select {
+    min-width: 0;
+    width: 100%;
+    max-width: 100%;
+    text-overflow: ellipsis;
+  }
+
+  .inline-select {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .inline-select__control {
+    min-width: 0;
+    max-width: 100%;
+    text-overflow: ellipsis;
+  }
+
+  .masthead-location-btn {
+    max-width: 100%;
+    white-space: normal;
+    text-align: center;
+  }
+}
+
 

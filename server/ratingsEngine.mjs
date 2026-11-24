@@ -18,14 +18,6 @@ const OMDB_EMPTY_TTL_MS = 6 * 3_600_000;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-function buildEstimatedDoubanStars(score10) {
-  if (score10 >= 8.5) return [52, 34, 11, 2, 1];
-  if (score10 >= 7.8) return [32, 45, 18, 4, 1];
-  if (score10 >= 7.0) return [19, 44, 28, 7, 2];
-  if (score10 >= 6.0) return [11, 31, 41, 13, 4];
-  return [6, 17, 38, 25, 14];
-}
-
 /**
  * Ensures the official IMDb daily dataset (`title.ratings.tsv.gz`, ~8.3 MB) is cached locally,
  * then streams it through gunzip to extract exact `{ score, votes }` for the requested `tt...` IDs.
@@ -693,9 +685,11 @@ export async function enrichMoviesWithTrueRatings(
       .trim();
     const trueDoubanScore = doubanRes?.score ?? null;
     const trueDoubanVotes = doubanRes?.votes ?? 0;
+    // Only emit starBreakdownPercent when actually retrieved from Douban; never fabricate synthetic tiers
     const trueDoubanStars =
-      doubanRes?.starBreakdownPercent ||
-      (trueDoubanScore !== null ? buildEstimatedDoubanStars(trueDoubanScore) : null);
+      Array.isArray(doubanRes?.starBreakdownPercent) && doubanRes.starBreakdownPercent.length === 5
+        ? doubanRes.starBreakdownPercent
+        : null;
     const doubanUrl =
       doubanRes?.url ||
       `https://search.douban.com/movie/subject_search?search_text=${encodeURIComponent(

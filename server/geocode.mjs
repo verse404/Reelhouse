@@ -92,6 +92,24 @@ const INSTANT_GAZETTEER = [
 ];
 
 const geocodeCache = new Map();
+const MAX_GEOCODE_CACHE_ENTRIES = 500;
+
+function setBoundedGeocodeCache(key, results) {
+  const now = Date.now();
+  if (geocodeCache.size >= MAX_GEOCODE_CACHE_ENTRIES) {
+    for (const [k, v] of geocodeCache.entries()) {
+      if (now - v.ts >= 24 * 3_600_000) {
+        geocodeCache.delete(k);
+      }
+    }
+    while (geocodeCache.size >= MAX_GEOCODE_CACHE_ENTRIES) {
+      const oldestKey = geocodeCache.keys().next().value;
+      if (oldestKey === undefined) break;
+      geocodeCache.delete(oldestKey);
+    }
+  }
+  geocodeCache.set(key, { ts: now, results });
+}
 
 export async function searchLocationsForQuery(rawQuery, preferredCity = 'melbourne') {
   let stripped = '';
@@ -132,7 +150,7 @@ export async function searchLocationsForQuery(rawQuery, preferredCity = 'melbour
 
   if (localHits.length >= 3) {
     const top = localHits.slice(0, 5);
-    geocodeCache.set(cacheKey, { ts: Date.now(), results: top });
+    setBoundedGeocodeCache(cacheKey, top);
     return top;
   }
 
@@ -194,6 +212,6 @@ export async function searchLocationsForQuery(rawQuery, preferredCity = 'melbour
   }
 
   const finalResults = localHits.slice(0, 6);
-  geocodeCache.set(cacheKey, { ts: Date.now(), results: finalResults });
+  setBoundedGeocodeCache(cacheKey, finalResults);
   return finalResults;
 }

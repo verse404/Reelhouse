@@ -195,12 +195,14 @@ export function SessionDetailModal({
               {displayMovieTitle}
             </h2>
             <p className="ticket-hero__sub">
-              Directed by {movie.director} · {formatRuntime(movie.runtimeMinutes)} ·{' '}
+              {lang === 'zh' ? '导演：' : 'Directed by '}
+              {movie.director} · {formatRuntime(movie.runtimeMinutes, lang)} ·{' '}
               {movie.languageNote}
             </p>
             <div className="ticket-hero__ratings">
               <RatingsPillBar
                 movie={movie}
+                lang={lang}
                 compact
                 contextKey="session-modal"
                 onInspectRatings={onInspectRatings}
@@ -214,7 +216,7 @@ export function SessionDetailModal({
                   aria-label={`Watch official trailer for ${movie.title}`}
                 >
                   <Play size={10} aria-hidden="true" fill="currentColor" />
-                  <span>Trailer</span>
+                  <span>{t.trailer}</span>
                 </button>
               )}
             </div>
@@ -223,22 +225,28 @@ export function SessionDetailModal({
 
         <div className="ticket-stub-grid">
           <div className="ticket-stub-cell">
-            <span className="ticket-stub-cell__label">Date</span>
+            <span className="ticket-stub-cell__label">{lang === 'zh' ? '放映日期' : 'Date'}</span>
             <strong className="ticket-stub-cell__value">{dateParts.fullLabel}</strong>
           </div>
 
           <div className="ticket-stub-cell">
-            <span className="ticket-stub-cell__label">Start → Est. Finish (incl. 15m previews)</span>
+            <span className="ticket-stub-cell__label">
+              {lang === 'zh'
+                ? '开映 → 预计散场（含 15 分钟贴片）'
+                : 'Start → Est. Finish (incl. 15m previews)'}
+            </span>
             <strong className="ticket-stub-cell__value ticket-stub-cell__value--mono">
               <Clock size={14} aria-hidden="true" />
               {timeWindow.startFormatted} → {timeWindow.finishFormatted}
-              {timeWindow.nextDay ? ' (+1d)' : ''}
+              {timeWindow.nextDay ? (lang === 'zh' ? ' (次日)' : ' (+1d)') : ''}
             </strong>
           </div>
 
           <div className="ticket-stub-cell">
-            <span className="ticket-stub-cell__label">Cinema &amp; Auditorium</span>
-            <strong className="ticket-stub-cell__value">{cinema.name}</strong>
+            <span className="ticket-stub-cell__label">
+              {lang === 'zh' ? '影院与影厅' : 'Cinema & Auditorium'}
+            </span>
+            <strong className="ticket-stub-cell__value">{displayCinemaName}</strong>
             <span className="ticket-stub-cell__sub">
               {cinema.chain} · {session.auditoriumName}
             </span>
@@ -246,23 +254,32 @@ export function SessionDetailModal({
 
           <div className="ticket-stub-cell">
             <span className="ticket-stub-cell__label">
-              Adult Guide Price{' '}
+              {lang === 'zh' ? '成人参考票价 ' : 'Adult Guide Price '}
               <span className="guide-price-tag">
-                {session.priceBasis === 'scraped_live' ? 'Live-Scraped Tariff' : 'Guide Price'}
+                {session.priceBasis === 'scraped_live'
+                  ? lang === 'zh'
+                    ? '实时抓取价'
+                    : 'Live-Scraped Tariff'
+                  : lang === 'zh'
+                    ? '标准参考价'
+                    : 'Guide Price'}
               </span>
             </span>
             <strong className="ticket-stub-cell__value ticket-stub-cell__value--price">
               {formatSessionPrice(session.priceAud, sessionCurrency)}
               {savings > 0.01 && (
                 <span className="price-strike">
-                  Reg. {formatSessionPrice(session.regularPriceAud, sessionCurrency)}
+                  {lang === 'zh' ? '原价 ' : 'Reg. '}
+                  {formatSessionPrice(session.regularPriceAud, sessionCurrency)}
                 </span>
               )}
             </strong>
             {savings > 0.01 && (
               <span className="ticket-stub-cell__saving">
-                {session.dealLabel ? `${session.dealLabel} · ` : ''}Save{' '}
-                {formatSessionPrice(savings, sessionCurrency)} off regular box office
+                {session.dealLabel ? `${session.dealLabel} · ` : ''}
+                {lang === 'zh'
+                  ? `较常规票价省 ${formatSessionPrice(savings, sessionCurrency)}`
+                  : `Save ${formatSessionPrice(savings, sessionCurrency)} off regular box office`}
               </span>
             )}
             {session.priceNote && (
@@ -276,8 +293,8 @@ export function SessionDetailModal({
             <p>
               <MapPin size={14} aria-hidden="true" />
               <span>
-                <strong>{cinema.suburb}</strong> ({formatDistanceKm(dist.km)} {dist.fullSuffix}) —{' '}
-                {cinema.address}
+                <strong>{cinema.suburb}</strong> ({formatDistanceKm(dist.km, lang)}{' '}
+                {dist.fullSuffix}) — {cinema.address}
               </span>
             </p>
             <div className="modal-venue-actions">

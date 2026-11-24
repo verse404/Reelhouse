@@ -35,7 +35,7 @@ import {
   saveShortlist,
   saveWatchlist,
 } from './utils/security';
-import { getLocalCurrentMinutesFromMidnight } from './utils/formatters';
+import { getDaysUntilRelease, getLocalCurrentMinutesFromMidnight } from './utils/formatters';
 import { getDisplayMovieTitle, getUiText } from './utils/i18n';
 import { evaluateSessionReachability } from './utils/planner';
 import {
@@ -126,19 +126,19 @@ export function App() {
       selectedMovieId: urlPatch.selectedMovieId ?? 'all',
       selectedCinemaId: urlPatch.selectedCinemaId ?? 'all',
       chain: urlPatch.chain ?? 'all',
-      favoritesOnly: false,
+      favoritesOnly: urlPatch.favoritesOnly ?? false,
       suburb: urlPatch.suburb ?? 'all',
-      timeOfDay: 'all',
-      formats: [],
-      vibe: 'all',
-      genre: 'all',
-      priceCap: 'all',
-      minRating: 'all',
+      timeOfDay: urlPatch.timeOfDay ?? 'all',
+      formats: urlPatch.formats ?? [],
+      vibe: urlPatch.vibe ?? 'all',
+      genre: urlPatch.genre ?? 'all',
+      priceCap: urlPatch.priceCap ?? 'all',
+      minRating: urlPatch.minRating ?? 'all',
       finishBy: urlPatch.finishBy ?? 'all',
       nearHubId: urlPatch.nearHubId ?? 'cbd',
       dealsOnly: urlPatch.dealsOnly ?? false,
       makeItOnly: urlPatch.makeItOnly ?? false,
-      showPastToday: false,
+      showPastToday: urlPatch.showPastToday ?? false,
       searchQuery: urlPatch.searchQuery ?? '',
     };
   });
@@ -171,6 +171,9 @@ export function App() {
   const [inspectedRatingsMovie, setInspectedRatingsMovie] = useState<Movie | null>(null);
   const [trailerMovie, setTrailerMovie] = useState<Movie | null>(null);
   const [isShortlistOpen, setIsShortlistOpen] = useState<boolean>(
+    () => parseValidatedFolioEntries(window.location.search).length > 0
+  );
+  const [preserveFolioInUrl, setPreserveFolioInUrl] = useState<boolean>(
     () => parseValidatedFolioEntries(window.location.search).length > 0
   );
   const [dockLinkCopied, setDockLinkCopied] = useState(false);
@@ -251,7 +254,7 @@ export function App() {
   useEffect(() => {
     const defaultToday = calendarDays[0]?.dateIso ?? filters.dateIso;
     const activeFolioItems =
-      isShortlistOpen && shortlist.length > 0
+      (isShortlistOpen || preserveFolioInUrl) && shortlist.length > 0
         ? shortlist.map((s) => ({ sessionId: s.sessionId, votes: s.votes }))
         : undefined;
     const qs = buildShareableFilterQueryString(
@@ -266,7 +269,7 @@ export function App() {
     if (nextRelativeUrl !== currentRelativeUrl) {
       window.history.replaceState(null, '', nextRelativeUrl);
     }
-  }, [filters, calendarDays, isAdminMode, isShortlistOpen, shortlist, lang]);
+  }, [filters, calendarDays, isAdminMode, isShortlistOpen, preserveFolioInUrl, shortlist, lang]);
   const cityCinemas = useMemo(
     () => {
       void catalogRevision;
@@ -414,15 +417,13 @@ export function App() {
 
   const movieOptions = useMemo(() => {
     const formatDropdownTitle = (m: Movie) =>
-      filters.city === 'shanghai' &&
-      m.ratings.douban.chineseTitle &&
-      m.ratings.douban.chineseTitle !== m.title
-        ? `${m.title} · ${m.ratings.douban.chineseTitle}`
-        : m.title;
+      getDisplayMovieTitle(m, lang, filters.city === 'shanghai');
 
     if (filters.releaseStatus === 'coming_soon') {
-      const cityCs = comingSoonMovies.filter((m) =>
-        (m.upcomingVenues ?? []).some((v) => v.city === filters.city)
+      const cityCs = comingSoonMovies.filter(
+        (m) =>
+          (!m.releaseDateIso || getDaysUntilRelease(m.releaseDateIso, cityMeta.timeZone) >= 0) &&
+          (m.upcomingVenues ?? []).some((v) => v.city === filters.city)
       );
       return [...cityCs]
         .sort((a, b) => a.title.localeCompare(b.title))
@@ -433,7 +434,15 @@ export function App() {
       .filter((m) => cityMovieIds.has(m.id))
       .sort((a, b) => a.title.localeCompare(b.title))
       .map((m) => ({ id: m.id, title: formatDropdownTitle(m) }));
-  }, [filters.releaseStatus, filters.city, allMovies, comingSoonMovies, citySessionsAllDays]);
+  }, [
+    filters.releaseStatus,
+    filters.city,
+    allMovies,
+    comingSoonMovies,
+    citySessionsAllDays,
+    cityMeta.timeZone,
+    lang,
+  ]);
 
   const suburbs = useMemo(() => {
     const unique = Array.from(new Set(cityCinemas.map((c) => c.suburb)));
@@ -484,6 +493,7 @@ export function App() {
       finishBy: 'all',
       nearHubId: 'cbd',
       dealsOnly: false,
+      makeItOnly: false,
       showPastToday: false,
       searchQuery: '',
     }));
@@ -537,7 +547,12 @@ export function App() {
   };
 
   const handleChangeBrowseMode = (mode: BrowseMode) => {
-    setFilters((prev) => ({ ...prev, browseMode: mode }));
+    setFilters((prev) => ({
+      ...prev,
+      browseMode: mode,
+      // Map view displays live screening sessions; exit Coming Soon automatically if user clicks Map
+      releaseStatus: mode === 'map' && prev.releaseStatus === 'coming_soon' ? 'in_cinemas' : prev.releaseStatus,
+    }));
   };
 
   const handleChangeReleaseStatus = (status: ReleaseStatus) => {
@@ -885,6 +900,12 @@ export function App() {
     const results: ComingSoonMovieItem[] = [];
 
     for (const movie of comingSoonMovies) {
+      if (
+        movie.releaseDateIso &&
+        getDaysUntilRelease(movie.releaseDateIso, cityMeta.timeZone) < 0
+      ) {
+        continue;
+      }
       if (filters.selectedMovieId !== 'all' && movie.id !== filters.selectedMovieId) continue;
       if (filters.genre !== 'all' && !movie.genres.includes(filters.genre)) continue;
       if (filters.minRating === 'imdb8' && (movie.ratings.imdb.score ?? 0) < 8.0) continue;
@@ -945,7 +966,7 @@ export function App() {
     }
 
     return results;
-  }, [comingSoonMovies, filters, allCinemasMap, favoriteCinemaIds, userOrigin]);
+  }, [comingSoonMovies, filters, allCinemasMap, favoriteCinemaIds, userOrigin, cityMeta.timeZone]);
 
   const watchlistedIds = useMemo(() => new Set(watchlist), [watchlist]);
 
@@ -1116,6 +1137,7 @@ export function App() {
           cinemas={cityCinemas}
           sessions={spotlightDaySessions}
           movieMap={movieMap}
+          lang={lang}
           userOrigin={userOrigin}
           selectedCinemaId={filters.selectedCinemaId}
           onSelectCinemaFilter={(cid) => handleUpdateFilters({ selectedCinemaId: cid })}
@@ -1127,6 +1149,7 @@ export function App() {
           <ComingSoonView
             items={comingSoonItems}
             cityMeta={cityMeta}
+            lang={lang}
             userOrigin={userOrigin}
             browseMode={filters.browseMode}
             watchlistedIds={watchlistedIds}
@@ -1265,15 +1288,15 @@ export function App() {
       <footer className="site-footer">
         <div className="site-footer__inner">
           <p className="site-footer__brand">
-            <strong>Reelhouse</strong> — Melbourne, Sydney &amp; Shanghai Cinema Discovery Guide
+            <strong>Reelhouse</strong> —{' '}
+            {lang === 'zh'
+              ? '墨尔本 · 悉尼 · 上海 精选影院排片与比价指南'
+              : 'Melbourne, Sydney & Shanghai Cinema Discovery Guide'}
           </p>
           <p className="site-footer__note">
-            Live &amp; curated multi-venue programming across 50 iconic &amp; flagship cinemas —
-            Melbourne &amp; Sydney (Hoyts, Event, Village, Reading, United, Palace, Dendy, IMAX,
-            Cinema Nova, Lido, Classic, Sun Theatre, Hayden Orpheum, Ritz &amp; Golden Age) and
-            Shanghai (Grand Cinema 大光明, Shanghai Film Art Center 上海影城 SHO, Cathay 国泰,
-            Palace iapm 百丽宫, MOViE MOViE, SFC 上影, Wanda IMAX, UME Xintiandi &amp; CGV). Confirm
-            final seat pricing on the official cinema checkout.
+            {lang === 'zh'
+              ? '实时与精选汇总三城 50 家地标及旗舰影院排片 — 墨尔本与悉尼（Hoyts、Event、Village、Reading、United、Palace、Dendy、IMAX、Cinema Nova、Lido、Classic、Sun Theatre、Hayden Orpheum、Ritz 与 Golden Age）及上海（大光明电影院、上海影城 SHO、国泰、百丽宫 iapm、MOViE MOViE、SFC 上影、万达 IMAX、UME 新天地与 CGV）。最终选座票价请以影院官方购票页面为准。'
+              : 'Live & curated multi-venue programming across 50 iconic & flagship cinemas — Melbourne & Sydney (Hoyts, Event, Village, Reading, United, Palace, Dendy, IMAX, Cinema Nova, Lido, Classic, Sun Theatre, Hayden Orpheum, Ritz & Golden Age) and Shanghai (Grand Cinema 大光明, Shanghai Film Art Center 上海影城 SHO, Cathay 国泰, Palace iapm 百丽宫, MOViE MOViE, SFC 上影, Wanda IMAX, UME Xintiandi & CGV). Confirm final seat pricing on the official cinema checkout.'}
           </p>
         </div>
       </footer>
@@ -1323,24 +1346,30 @@ export function App() {
         onClose={() => setIsShortlistOpen(false)}
         onVote={handleVoteShortlist}
         onRemove={handleToggleShortlist}
-        onClearAll={handleClearShortlist}
+        onClearAll={() => {
+          setPreserveFolioInUrl(false);
+          handleClearShortlist();
+        }}
         onInspectRatings={setInspectedRatingsMovie}
         onWatchTrailer={setTrailerMovie}
       />
 
       <MovieRatingsModal
         movie={inspectedRatingsMovie}
+        lang={lang}
         onClose={() => setInspectedRatingsMovie(null)}
       />
 
       <TrailerModal
         movie={trailerMovie}
+        lang={lang}
         onClose={() => setTrailerMovie(null)}
       />
 
       <MyLocationModal
         isOpen={isLocationModalOpen}
         cityMeta={cityMeta}
+        lang={lang}
         userOrigin={userOrigin}
         onClose={() => setIsLocationModalOpen(false)}
         onApplyCustomCoordinates={handleApplyCustomCoordinates}

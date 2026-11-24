@@ -1,4 +1,5 @@
-const CACHE_VERSION = 'reelhouse-pwa-v1';
+const CACHE_VERSION = 'reelhouse-pwa-v2';
+const MAX_ASSET_CACHE_ENTRIES = 40;
 const SHELL_ASSETS = [
   './',
   './index.html',
@@ -8,6 +9,19 @@ const SHELL_ASSETS = [
   './icon-512.png',
   './og-reelhouse.jpg',
 ];
+
+async function pruneOldAssets(cache) {
+  try {
+    const keys = await cache.keys();
+    const assetKeys = keys.filter((req) => new URL(req.url).pathname.includes('/assets/'));
+    if (assetKeys.length > MAX_ASSET_CACHE_ENTRIES) {
+      const toRemove = assetKeys.slice(0, assetKeys.length - MAX_ASSET_CACHE_ENTRIES);
+      await Promise.all(toRemove.map((k) => cache.delete(k)));
+    }
+  } catch {
+    // Ignore cache pruning errors
+  }
+}
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -79,7 +93,10 @@ self.addEventListener('fetch', (event) => {
         .then((networkRes) => {
           if (networkRes && networkRes.ok) {
             const copy = networkRes.clone();
-            caches.open(CACHE_VERSION).then((cache) => cache.put(request, copy)).catch(() => {});
+            caches
+              .open(CACHE_VERSION)
+              .then((cache) => cache.put(request, copy).then(() => pruneOldAssets(cache)))
+              .catch(() => {});
           }
           return networkRes;
         })

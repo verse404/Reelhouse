@@ -1,15 +1,17 @@
 import { useEffect } from 'react';
 import { ExternalLink, Film, X } from 'lucide-react';
-import type { Movie } from '../types/cinema';
+import type { AppLanguage, Movie } from '../types/cinema';
 import { formatRuntime } from '../utils/formatters';
+import { getDisplayMovieTitle } from '../utils/i18n';
 import { getSafeYoutubeEmbedUrl, getSafeYoutubeWatchUrl } from '../utils/security';
 
 interface TrailerModalProps {
   movie: Movie | null;
+  lang?: AppLanguage;
   onClose: () => void;
 }
 
-export function TrailerModal({ movie, onClose }: TrailerModalProps) {
+export function TrailerModal({ movie, lang = 'en', onClose }: TrailerModalProps) {
   useEffect(() => {
     if (!movie) return;
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -24,6 +26,8 @@ export function TrailerModal({ movie, onClose }: TrailerModalProps) {
   const embedUrl = getSafeYoutubeEmbedUrl(movie.trailerYoutubeKey);
   const watchUrl = getSafeYoutubeWatchUrl(movie.trailerYoutubeKey);
   if (!embedUrl) return null;
+
+  const displayTitle = getDisplayMovieTitle(movie, lang, false);
 
   return (
     <div
@@ -43,10 +47,11 @@ export function TrailerModal({ movie, onClose }: TrailerModalProps) {
           <div>
             <span className="ticket-kicker">
               <Film size={13} aria-hidden="true" />
-              Official Theatrical Trailer · {movie.releaseYear} · {formatRuntime(movie.runtimeMinutes)}
+              {lang === 'zh' ? '官方院线预告片' : 'Official Theatrical Trailer'} · {movie.releaseYear} ·{' '}
+              {formatRuntime(movie.runtimeMinutes, lang)}
             </span>
             <h2 id="trailer-modal-title" className="shortlist-title">
-              {movie.title}
+              {displayTitle}
             </h2>
           </div>
 
@@ -59,7 +64,7 @@ export function TrailerModal({ movie, onClose }: TrailerModalProps) {
                 id="trailer-open-youtube-link"
                 className="venue-link"
               >
-                <span>Open on YouTube</span>
+                <span>{lang === 'zh' ? '在 YouTube 打开' : 'Open on YouTube'}</span>
                 <ExternalLink size={12} aria-hidden="true" />
               </a>
             )}
@@ -68,7 +73,7 @@ export function TrailerModal({ movie, onClose }: TrailerModalProps) {
               id="close-trailer-modal-btn"
               className="icon-close-btn"
               onClick={onClose}
-              aria-label="Close trailer player"
+              aria-label={lang === 'zh' ? '关闭预告片播放器' : 'Close trailer player'}
             >
               <X size={18} />
             </button>
@@ -78,7 +83,9 @@ export function TrailerModal({ movie, onClose }: TrailerModalProps) {
         <div className="trailer-player-frame">
           <iframe
             src={embedUrl}
-            title={`Official trailer for ${movie.title}`}
+            title={
+              lang === 'zh' ? `《${displayTitle}》官方预告片` : `Official trailer for ${movie.title}`
+            }
             className="trailer-player-frame__iframe"
             allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
             referrerPolicy="strict-origin-when-cross-origin"

@@ -1,12 +1,17 @@
 import type {
   AppLanguage,
   BrowseMode,
+  CinemaVibe,
   CityId,
   CityTimeZone,
   FilterState,
   FinishByOption,
+  FormatType,
+  MinRatingOption,
+  PriceCapOption,
   ReleaseStatus,
   ShortlistEntry,
+  TimeOfDay,
 } from '../types/cinema';
 
 /**
@@ -580,6 +585,23 @@ export function downloadIcsFile(input: GoogleCalendarSessionInput): void {
   window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1500);
 }
 
+const VALID_URL_FORMATS = new Set<FormatType>([
+  'IMAX',
+  '35mm / 70mm',
+  'Dolby Atmos',
+  'Gold Class / LUX',
+  'Vmax / Xtremescreen',
+  'Standard',
+]);
+
+const VALID_URL_VIBES = new Set<CinemaVibe>([
+  'Indie & Arthouse',
+  'Heritage Palace',
+  'Grand Format',
+  'Boutique Luxury',
+  'Major Multiplex',
+]);
+
 /**
  * Parses and strictly validates shareable URL query parameters (`?city=...&date=...&film=...&cinema=...`).
  */
@@ -625,6 +647,10 @@ export function parseValidatedUrlFilters(search: string): Partial<FilterState> {
       }
     }
 
+    if (params.get('favs') === '1') {
+      out.favoritesOnly = true;
+    }
+
     const suburb = params.get('suburb');
     if (suburb) {
       const cleanSuburb = sanitizeSearchQuery(suburb).trim();
@@ -638,6 +664,45 @@ export function parseValidatedUrlFilters(search: string): Partial<FilterState> {
       out.nearHubId = near;
     }
 
+    const time = params.get('time');
+    if (time === 'morning' || time === 'afternoon' || time === 'evening' || time === 'late') {
+      out.timeOfDay = time as TimeOfDay;
+    }
+
+    const fmtParam = params.get('fmt');
+    if (fmtParam) {
+      const parsedFormats = fmtParam
+        .split(',')
+        .map((s) => s.trim())
+        .filter((s): s is FormatType => VALID_URL_FORMATS.has(s as FormatType));
+      if (parsedFormats.length > 0) {
+        out.formats = Array.from(new Set(parsedFormats));
+      }
+    }
+
+    const vibe = params.get('vibe');
+    if (vibe && VALID_URL_VIBES.has(vibe as CinemaVibe)) {
+      out.vibe = vibe as CinemaVibe;
+    }
+
+    const genre = params.get('genre');
+    if (genre) {
+      const cleanGenre = sanitizeSearchQuery(genre).trim();
+      if (cleanGenre.length > 0 && cleanGenre.length <= 32) {
+        out.genre = cleanGenre;
+      }
+    }
+
+    const price = params.get('price');
+    if (price === 'under25' || price === 'under18') {
+      out.priceCap = price as PriceCapOption;
+    }
+
+    const rating = params.get('rating');
+    if (rating === 'imdb8' || rating === 'rt90' || rating === 'douban8') {
+      out.minRating = rating as MinRatingOption;
+    }
+
     const finish = params.get('finish');
     if (finish === '1800' || finish === '2130' || finish === '2230' || finish === '2330') {
       out.finishBy = finish as FinishByOption;
@@ -649,6 +714,10 @@ export function parseValidatedUrlFilters(search: string): Partial<FilterState> {
 
     if (params.get('makeit') === '1') {
       out.makeItOnly = true;
+    }
+
+    if (params.get('past') === '1') {
+      out.showPastToday = true;
     }
 
     const q = params.get('q');
@@ -782,11 +851,32 @@ export function buildShareableFilterQueryString(
   if (filters.chain !== 'all') {
     params.set('chain', filters.chain);
   }
+  if (filters.favoritesOnly) {
+    params.set('favs', '1');
+  }
   if (filters.suburb !== 'all') {
     params.set('suburb', filters.suburb);
   }
   if (filters.nearHubId !== 'cbd' && filters.nearHubId !== 'gps') {
     params.set('near', filters.nearHubId);
+  }
+  if (filters.releaseStatus === 'in_cinemas' && filters.timeOfDay !== 'all') {
+    params.set('time', filters.timeOfDay);
+  }
+  if (filters.formats.length > 0) {
+    params.set('fmt', filters.formats.join(','));
+  }
+  if (filters.vibe !== 'all') {
+    params.set('vibe', filters.vibe);
+  }
+  if (filters.genre !== 'all') {
+    params.set('genre', filters.genre);
+  }
+  if (filters.releaseStatus === 'in_cinemas' && filters.priceCap !== 'all') {
+    params.set('price', filters.priceCap);
+  }
+  if (filters.minRating !== 'all') {
+    params.set('rating', filters.minRating);
   }
   if (filters.releaseStatus === 'in_cinemas' && filters.finishBy !== 'all') {
     params.set('finish', filters.finishBy);
@@ -796,6 +886,9 @@ export function buildShareableFilterQueryString(
   }
   if (filters.releaseStatus === 'in_cinemas' && filters.makeItOnly) {
     params.set('makeit', '1');
+  }
+  if (filters.releaseStatus === 'in_cinemas' && filters.showPastToday) {
+    params.set('past', '1');
   }
   if (filters.searchQuery.trim().length > 0) {
     params.set('q', filters.searchQuery.trim());

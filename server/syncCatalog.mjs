@@ -1251,7 +1251,13 @@ export function pickBestYoutubeTrailerKey(videosList) {
   return valid[0]?.key;
 }
 
-async function fetchTmdbMovieFullById(tmdbId, apiKey, posterIndex, releaseStatus) {
+async function fetchTmdbMovieFullById(
+  tmdbId,
+  apiKey,
+  posterIndex,
+  releaseStatus,
+  regionPreference = 'AU'
+) {
   const url = new URL(`https://api.themoviedb.org/3/movie/${tmdbId}`);
   url.searchParams.set('api_key', apiKey);
   url.searchParams.set('language', 'en-AU');
@@ -1264,17 +1270,31 @@ async function fetchTmdbMovieFullById(tmdbId, apiKey, posterIndex, releaseStatus
   const d = await fetchJsonSafe(url.toString());
 
   let auCert = 'M';
-  let auReleaseDate = d.release_date || '2026-12-01';
+  let regionalReleaseDate = d.release_date || '';
   const releaseResults = d.release_dates?.results || [];
+  const preferredEntry =
+    releaseResults.find((r) => r.iso_3166_1 === regionPreference) ||
+    releaseResults.find((r) => r.iso_3166_1 === 'AU');
   const auEntry = releaseResults.find((r) => r.iso_3166_1 === 'AU');
   if (auEntry && Array.isArray(auEntry.release_dates)) {
     const withCert = auEntry.release_dates.find((x) => x.certification);
     if (withCert) auCert = normalizeClassification(withCert.certification);
-    const theatrical = auEntry.release_dates.find((x) => x.type === 3 || x.type === 2);
-    if (theatrical?.release_date) {
-      auReleaseDate = theatrical.release_date.slice(0, 10);
+  }
+  if (preferredEntry && Array.isArray(preferredEntry.release_dates)) {
+    const theatricalDates = preferredEntry.release_dates
+      .filter((x) => (x.type === 3 || x.type === 2) && x.release_date)
+      .map((x) => String(x.release_date).slice(0, 10))
+      .sort();
+    // For coming_soon, prefer the upcoming theatrical date rather than an older festival/re-release date
+    const todayStr = new Date().toISOString().slice(0, 10);
+    const futureDate = theatricalDates.find((dt) => dt >= todayStr);
+    if (futureDate) {
+      regionalReleaseDate = futureDate;
+    } else if (theatricalDates.length > 0) {
+      regionalReleaseDate = theatricalDates[theatricalDates.length - 1];
     }
   }
+  const auReleaseDate = regionalReleaseDate || '2026-12-01';
 
   const crew = d.credits?.crew || [];
   const directorObj = crew.find((c) => c.job === 'Director');
@@ -1285,7 +1305,15 @@ async function fetchTmdbMovieFullById(tmdbId, apiKey, posterIndex, releaseStatus
   const zhEntry =
     translations.find((t) => t.iso_639_1 === 'zh' && t.iso_3166_1 === 'CN') ||
     translations.find((t) => t.iso_639_1 === 'zh');
-  const chineseTitle = zhEntry?.data?.title || d.original_title || d.title;
+  const enEntry =
+    translations.find((t) => t.iso_639_1 === 'en' && t.iso_3166_1 === 'US' && t.data?.title) ||
+    translations.find((t) => t.iso_639_1 === 'en' && t.data?.title);
+  // If TMDB returned a non-Latin title in en-AU (e.g. Chinese-only title), prefer an official English translation if present
+  const resolvedEnglishTitle =
+    /[\u4e00-\u9fff]/.test(String(d.title || '')) && enEntry?.data?.title
+      ? String(enEntry.data.title).trim()
+      : d.title;
+  const chineseTitle = zhEntry?.data?.title || d.original_title || resolvedEnglishTitle;
   const chineseTagline =
     typeof zhEntry?.data?.tagline === 'string' ? zhEntry.data.tagline.trim() : '';
   const chineseSynopsis =
@@ -1300,16 +1328,16 @@ async function fetchTmdbMovieFullById(tmdbId, apiKey, posterIndex, releaseStatus
 
   const imdbUrl = imdbId
     ? `https://www.imdb.com/title/${imdbId}/`
-    : `https://www.imdb.com/find/?q=${encodeURIComponent(d.title)}&s=tt`;
-  const rtUrl = `https://www.rottentomatoes.com/search?search=${encodeURIComponent(d.title)}`;
+    : `https://www.imdb.com/find/?q=${encodeURIComponent(resolvedEnglishTitle)}&s=tt`;
+  const rtUrl = `https://www.rottentomatoes.com/search?search=${encodeURIComponent(resolvedEnglishTitle)}`;
   const doubanUrl = `https://search.douban.com/movie/subject_search?search_text=${encodeURIComponent(
-    imdbId || chineseTitle || d.title
+    imdbId || chineseTitle || resolvedEnglishTitle
   )}&cat=1002`;
 
   return {
     id: `tmdb-${d.id}`,
     imdbId,
-    title: d.title,
+    title: resolvedEnglishTitle,
     director,
     releaseYear: Number((d.release_date || '2026').slice(0, 4)) || 2026,
     releaseStatus,
@@ -1346,7 +1374,11 @@ async function fetchTmdbMovieFullById(tmdbId, apiKey, posterIndex, releaseStatus
     countryOrigin: countries.join(' / ') || 'International',
     languageNote: d.spoken_languages?.[0]?.english_name || 'English',
     tagline: d.tagline || `Directed by ${director}.`,
-    synopsis: d.overview || 'Now screening in Melbourne and Sydney cinemas.',
+    synopsis:
+      d.overview ||
+      (releaseStatus === 'coming_soon'
+        ? 'Upcoming theatrical release — check official venue box office for advance tickets.'
+        : 'Now screening across Melbourne, Sydney, and Shanghai cinemas.'),
     ...(chineseTagline ? { chineseTagline } : {}),
     ...(chineseSynopsis ? { chineseSynopsis } : {}),
     isFeaturedMarquee: posterIndex < 3 && releaseStatus === 'in_cinemas',
@@ -1424,6 +1456,10 @@ function createFallbackMovieRecord(rawTitle, posterIndex, hintMeta = null) {
 async function resolveMovieViaTmdb(rawTitle, tmdbApiKey, posterIndex, hintMeta = null) {
   const isChineseRaw = /[\u4e00-\u9fff]/.test(String(rawTitle));
   const cleanSearchTitle = String(rawTitle)
+    .replace(
+      /^(?:JIFF|MIFF|SFF|SIFF|NT Live|RBO Cinema Season[^:]*|Monroe\s*100|Jodofest|Doctor Who Day|Retrospective|Classic Showcase|Met Opera)\s*[:\-–—]\s*/i,
+      ''
+    )
     .replace(/\b(4K|35mm|70mm|IMAX|Restoration|Preview|Q&A|Anniversary|Re-release)\b/gi, '')
     .replace(/\([^)]*\)/g, '')
     .replace(/（[^）]*）/g, '')
@@ -2690,29 +2726,50 @@ export async function syncLiveCatalog() {
     fetchJsonSafe(upcomingUrlCn).catch(() => ({ results: [] })),
   ]);
 
+  const todayUtcIso = new Date().toISOString().slice(0, 10);
   const inCinemaIds = new Set(movies.map((m) => m.id));
+  const isViableUpcomingCandidate = (m) => {
+    if (!m || !m.id || inCinemaIds.has(`tmdb-${m.id}`)) return false;
+    if (!m.poster_path) return false;
+    const rel = String(m.release_date || '').slice(0, 10);
+    if (rel && rel < todayUtcIso) return false;
+    // Skip zero-overview / obscure stub entries with negligible buzz
+    if (!m.overview && Number(m.popularity || 0) < 12) return false;
+    return true;
+  };
+
   const auUpcomingIds = (upcomingResAu.results || [])
+    .filter(isViableUpcomingCandidate)
     .map((m) => m.id)
-    .filter((id) => !inCinemaIds.has(`tmdb-${id}`))
     .slice(0, 8);
   const cnUpcomingIds = (upcomingResCn.results || [])
+    .filter(isViableUpcomingCandidate)
     .map((m) => m.id)
-    .filter((id) => !inCinemaIds.has(`tmdb-${id}`))
     .slice(0, 8);
 
   const auUpcomingSet = new Set(auUpcomingIds);
   const cnUpcomingSet = new Set(cnUpcomingIds);
   // If CN upcoming has fewer than 6 unique titles, also project top global upcoming tentpoles onto Shanghai houses
-  for (const id of auUpcomingIds.slice(0, 5)) {
+  for (const id of auUpcomingIds.slice(0, 6)) {
     if (cnUpcomingSet.size >= 8) break;
     cnUpcomingSet.add(id);
   }
 
   const combinedUpcomingIds = Array.from(new Set([...auUpcomingIds, ...cnUpcomingSet]));
 
-  const comingSoonMovies = await Promise.all(
+  const rawComingSoonMovies = await Promise.all(
     combinedUpcomingIds.map(async (id, j) => {
-      const full = await fetchTmdbMovieFullById(id, cfg.tmdbApiKey, 10 + j, 'coming_soon');
+      const preferredRegion = auUpcomingSet.has(id) ? 'AU' : 'CN';
+      const full = await fetchTmdbMovieFullById(
+        id,
+        cfg.tmdbApiKey,
+        10 + j,
+        'coming_soon',
+        preferredRegion
+      );
+      if (!full.releaseDateIso || full.releaseDateIso < todayUtcIso) {
+        return null;
+      }
       const venues = [];
       if (auUpcomingSet.has(id)) {
         venues.push(
@@ -2720,85 +2777,85 @@ export async function syncLiveCatalog() {
             cinemaId: 'mel-imax',
             city: 'melbourne',
             format: 'IMAX',
-            previewNote: `IMAX Melbourne 1.43:1 Opening — ${full.releaseDateIso}`,
+            previewNote: `Expected IMAX Melbourne 1.43:1 engagement — ${full.releaseDateIso}`,
           },
           {
             cinemaId: 'mel-kino',
             city: 'melbourne',
             format: 'Standard',
-            previewNote: `Paris End CBD Premiere — ${full.releaseDateIso}`,
+            previewNote: `Expected Paris End CBD engagement — ${full.releaseDateIso}`,
           },
           {
             cinemaId: 'mel-nova',
             city: 'melbourne',
             format: 'Standard',
-            previewNote: `Carlton Season Opening — ${full.releaseDateIso}`,
+            previewNote: `Expected Carlton season engagement — ${full.releaseDateIso}`,
           },
           {
             cinemaId: 'mel-classic',
             city: 'melbourne',
             format: 'Dolby Atmos',
-            previewNote: `Elsternwick Gala Engagement — ${full.releaseDateIso}`,
+            previewNote: `Expected Elsternwick engagement — ${full.releaseDateIso}`,
           },
           {
             cinemaId: 'mel-hoyts-chadstone',
             city: 'melbourne',
             format: 'Vmax / Xtremescreen',
-            previewNote: `Chadstone Xtremescreen Opening — ${full.releaseDateIso}`,
+            previewNote: `Expected Chadstone Xtremescreen release — ${full.releaseDateIso}`,
           },
           {
             cinemaId: 'mel-village-rivoli',
             city: 'melbourne',
             format: 'Gold Class / LUX',
-            previewNote: `Rivoli Camberwell Gold Class — ${full.releaseDateIso}`,
+            previewNote: `Expected Rivoli Camberwell release — ${full.releaseDateIso}`,
           },
           {
             cinemaId: 'mel-reading-burwood',
             city: 'melbourne',
             format: 'Dolby Atmos',
-            previewNote: `Burwood TITAN LUXE Atmos — ${full.releaseDateIso}`,
+            previewNote: `Expected Burwood TITAN LUXE release — ${full.releaseDateIso}`,
           },
           {
             cinemaId: 'syd-imax',
             city: 'sydney',
             format: 'IMAX',
-            previewNote: `IMAX Sydney Laser Opening — ${full.releaseDateIso}`,
+            previewNote: `Expected IMAX Sydney Laser engagement — ${full.releaseDateIso}`,
           },
           {
             cinemaId: 'syd-event-george',
             city: 'sydney',
             format: 'Vmax / Xtremescreen',
-            previewNote: `George St Flagship Opening — ${full.releaseDateIso}`,
+            previewNote: `Expected George St Flagship release — ${full.releaseDateIso}`,
           },
           {
             cinemaId: 'syd-event-parramatta',
             city: 'sydney',
             format: 'Gold Class / LUX',
-            previewNote: `Parramatta Gold Class — ${full.releaseDateIso}`,
+            previewNote: `Expected Parramatta Gold Class release — ${full.releaseDateIso}`,
           },
           {
             cinemaId: 'syd-ritz',
             city: 'sydney',
             format: 'Standard',
-            previewNote: `Randwick Premiere — ${full.releaseDateIso}`,
+            previewNote: `Expected Randwick engagement — ${full.releaseDateIso}`,
           },
           {
             cinemaId: 'syd-palace-central',
             city: 'sydney',
             format: 'Gold Class / LUX',
-            previewNote: `Chippendale Salon Engagement — ${full.releaseDateIso}`,
+            previewNote: `Expected Chippendale Salon engagement — ${full.releaseDateIso}`,
           },
           {
             cinemaId: 'syd-dendy-newtown',
             city: 'sydney',
             format: 'Standard',
-            previewNote: `Newtown Season Engagement — ${full.releaseDateIso}`,
+            previewNote: `Expected Newtown Season engagement — ${full.releaseDateIso}`,
           },
           {
             cinemaId: 'syd-reading-rhodes',
             city: 'sydney',
             format: 'Dolby Atmos',
-            previewNote: `Rhodes TITAN LUXE Atmos — ${full.releaseDateIso}`,
+            previewNote: `Expected Rhodes TITAN LUXE release — ${full.releaseDateIso}`,
           }
         );
       }
@@ -2808,37 +2865,37 @@ export async function syncLiveCatalog() {
             cinemaId: 'sha-grand',
             city: 'shanghai',
             format: 'Vmax / Xtremescreen',
-            previewNote: `大光明 LUXE 首映礼 · Grand Cinema Opening — ${full.releaseDateIso}`,
+            previewNote: `预计排映 · 大光明 LUXE 影厅 — ${full.releaseDateIso}`,
           },
           {
             cinemaId: 'sha-sho',
             city: 'shanghai',
             format: 'Dolby Atmos',
-            previewNote: `上海影城 1号杜比剧场首映 — ${full.releaseDateIso}`,
+            previewNote: `预计排映 · 上海影城 1号杜比剧场 — ${full.releaseDateIso}`,
           },
           {
             cinemaId: 'sha-palace-iapm',
             city: 'shanghai',
             format: 'IMAX',
-            previewNote: `环贸 iapm 激光 IMAX 零点场/首映 — ${full.releaseDateIso}`,
+            previewNote: `预计排映 · 环贸 iapm 激光 IMAX — ${full.releaseDateIso}`,
           },
           {
             cinemaId: 'sha-sfc-grandgateway',
             city: 'shanghai',
             format: 'IMAX',
-            previewNote: `徐家汇港汇永华 IMAX 激光首映 — ${full.releaseDateIso}`,
+            previewNote: `预计排映 · 徐家汇港汇永华 IMAX — ${full.releaseDateIso}`,
           },
           {
             cinemaId: 'sha-moviemovie-taikoo',
             city: 'shanghai',
             format: 'Dolby Atmos',
-            previewNote: `前滩太古里 MOViE MOViE 特别放映 — ${full.releaseDateIso}`,
+            previewNote: `预计排映 · 前滩太古里 MOViE MOViE — ${full.releaseDateIso}`,
           },
           {
             cinemaId: 'sha-wanda-wujiaochang',
             city: 'shanghai',
             format: 'IMAX',
-            previewNote: `五角场万达 IMAX 激光/杜比影院 — ${full.releaseDateIso}`,
+            previewNote: `预计排映 · 五角场万达 IMAX 激光/杜比 — ${full.releaseDateIso}`,
           }
         );
       }
@@ -2846,6 +2903,7 @@ export async function syncLiveCatalog() {
       return full;
     })
   );
+  const comingSoonMovies = rawComingSoonMovies.filter(Boolean);
 
   // 4. Enrich ALL movies (In-Cinemas + Coming Soon) with TRUE ratings (Official IMDb + MDBList RT + Live Douban)
   await enrichMoviesWithTrueRatings([...movies, ...comingSoonMovies], {

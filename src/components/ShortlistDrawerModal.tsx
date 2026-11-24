@@ -249,7 +249,11 @@ export function ShortlistDrawerModal({
       >
         <div className="modal-sheet__header">
           <div>
-            <span className="ticket-kicker">Decision Helper · Solo or Group Picker</span>
+            <span className="ticket-kicker">
+              {lang === 'zh'
+                ? '观影决策助手 · 单人筛选或好友投票拼单'
+                : 'Decision Helper · Solo or Group Picker'}
+            </span>
             <h2 id="shortlist-modal-title" className="shortlist-title">
               {t.shortlistTitle(items.length)}
             </h2>
@@ -323,11 +327,21 @@ export function ShortlistDrawerModal({
 
         {items.length === 0 ? (
           <div className="empty-state empty-state--compact">
-            <h3 className="empty-state__title">Your comparison shortlist is empty</h3>
+            <h3 className="empty-state__title">
+              {lang === 'zh' ? '对比清单目前为空' : 'Your comparison shortlist is empty'}
+            </h3>
             <p className="empty-state__body">
-              Bookmark 2 or more session times across Melbourne or Sydney using the{' '}
-              <strong>bookmark icon</strong> on any session pill to compare finish times, formats,
-              suburbs, and ticket prices side-by-side.
+              {lang === 'zh' ? (
+                <>
+                  点击任意排片场次旁的<strong>书签图标</strong>收藏 2 个及以上场次，即可并排对比散场时间、影厅制式、距离与参考票价，并一键发给朋友投票。
+                </>
+              ) : (
+                <>
+                  Bookmark 2 or more session times across Melbourne, Sydney, or Shanghai using the{' '}
+                  <strong>bookmark icon</strong> on any session pill to compare finish times,
+                  formats, suburbs, and ticket prices side-by-side.
+                </>
+              )}
             </p>
           </div>
         ) : (
@@ -415,6 +429,7 @@ export function ShortlistDrawerModal({
                       <div className="compare-card__ratings-wrap">
                         <RatingsPillBar
                           movie={movie}
+                          lang={lang}
                           compact
                           contextKey={`shortlist-${session.id}`}
                           onInspectRatings={onInspectRatings}
@@ -437,14 +452,16 @@ export function ShortlistDrawerModal({
 
                   <dl className="compare-specs">
                     <div className="compare-specs__row">
-                      <dt>Cinema &amp; Suburb</dt>
+                      <dt>{lang === 'zh' ? '影院与商圈' : 'Cinema & Suburb'}</dt>
                       <dd>
-                        <strong>{cinema.name}</strong>
+                        <strong>{displayCinema}</strong>
                         <span>
                           {cinema.suburb} (
                           {cinema.city === activeCity
-                            ? `${formatDistanceKm(dist.km)} ${dist.fullSuffix}`
-                            : `${formatDistanceKm(cinema.distanceFromCbdKm)} from CBD`}
+                            ? `${formatDistanceKm(dist.km, lang)} ${dist.fullSuffix}`
+                            : `${formatDistanceKm(cinema.distanceFromCbdKm, lang)} ${
+                                lang === 'zh' ? '距市中心' : 'from CBD'
+                              }`}
                           )
                         </span>
                         <a
@@ -455,14 +472,14 @@ export function ShortlistDrawerModal({
                           className="maps-inline-btn maps-inline-btn--spaced"
                         >
                           <Navigation size={11} aria-hidden="true" />
-                          <span>Open in Google Maps</span>
+                          <span>{lang === 'zh' ? '在 Google 地图查看' : 'Open in Google Maps'}</span>
                           <ExternalLink size={10} aria-hidden="true" />
                         </a>
                       </dd>
                     </div>
 
                     <div className="compare-specs__row">
-                      <dt>Date &amp; Window</dt>
+                      <dt>{lang === 'zh' ? '日期与时段' : 'Date & Window'}</dt>
                       <dd className="compare-specs__mono">
                         <strong>
                           {dateParts.weekdayShort} {dateParts.dayMonthShort}
@@ -497,7 +514,7 @@ export function ShortlistDrawerModal({
                     </div>
 
                     <div className="compare-specs__row">
-                      <dt>Screen &amp; Experience</dt>
+                      <dt>{lang === 'zh' ? '银幕与影厅' : 'Screen & Experience'}</dt>
                       <dd>
                         <strong>{session.format}</strong>
                         <span>{session.auditoriumName}</span>
@@ -505,7 +522,7 @@ export function ShortlistDrawerModal({
                     </div>
 
                     <div className="compare-specs__row">
-                      <dt>Getting There</dt>
+                      <dt>{lang === 'zh' ? '交通指南' : 'Getting There'}</dt>
                       <dd>
                         <span>{cinema.transitNote}</span>
                       </dd>
@@ -513,7 +530,10 @@ export function ShortlistDrawerModal({
 
                     <div className="compare-specs__row">
                       <dt>
-                        Guide Price <span className="guide-price-tag">Guide</span>
+                        {lang === 'zh' ? '参考票价 ' : 'Guide Price '}
+                        <span className="guide-price-tag">
+                          {lang === 'zh' ? '参考' : 'Guide'}
+                        </span>
                       </dt>
                       <dd className="compare-specs__price">
                         <strong>

@@ -79,19 +79,31 @@ export function CinemaBrowseView({
       <div className="empty-state" role="status">
         <h2 className="empty-state__title">
           {favoritesOnlyActive
-            ? 'No favorite cinemas match this selection yet'
+            ? lang === 'zh'
+              ? '暂无符合条件的收藏影院'
+              : 'No favorite cinemas match this selection yet'
             : hiddenPastTodayCount > 0
-              ? 'Remaining screenings for today have already begun'
-              : 'No cinemas match these filters'}
+              ? lang === 'zh'
+                ? '今天余下的匹配场次均已开场'
+                : 'Remaining screenings for today have already begun'
+              : lang === 'zh'
+                ? '当前筛选条件下暂无匹配影院'
+                : 'No cinemas match these filters'}
         </h2>
         <p className="empty-state__body">
           {favoritesOnlyActive
-            ? 'Tap the heart button ("Favorite") on any cinema card or venue row to build your personal list of favorite houses, or reset filters to browse all venues.'
+            ? lang === 'zh'
+              ? '点击任意影院卡片上的「收藏影院」即可添加到常用影院列表，或重置筛选查看全城影院。'
+              : 'Tap the heart button ("Favorite") on any cinema card or venue row to build your personal list of favorite houses, or reset filters to browse all venues.'
             : hiddenPastTodayCount > 0
-              ? `${hiddenPastTodayCount} matching ${
-                  hiddenPastTodayCount === 1 ? 'session has' : 'sessions have'
-                } already started earlier today — pick Tomorrow above or reveal earlier sessions.`
-              : 'Reset your chain, suburb, format, rating, or price filters to view all venues and schedules.'}
+              ? lang === 'zh'
+                ? `今日早些时候已有 ${hiddenPastTodayCount} 场匹配排片开场 — 可切换到明天，或展开今日已开场场次。`
+                : `${hiddenPastTodayCount} matching ${
+                    hiddenPastTodayCount === 1 ? 'session has' : 'sessions have'
+                  } already started earlier today — pick Tomorrow above or reveal earlier sessions.`
+              : lang === 'zh'
+                ? '重置院线、商圈、影厅制式、评分或预算筛选，查看所有影院排片。'
+                : 'Reset your chain, suburb, format, rating, or price filters to view all venues and schedules.'}
         </p>
         <div className="empty-state__actions">
           {hiddenPastTodayCount > 0 && (
@@ -101,7 +113,9 @@ export function CinemaBrowseView({
               className="btn-secondary"
               onClick={onShowPastToday}
             >
-              Show Earlier Today ({hiddenPastTodayCount})
+              {lang === 'zh'
+                ? `显示今日已开场场次 (${hiddenPastTodayCount})`
+                : `Show Earlier Today (${hiddenPastTodayCount})`}
             </button>
           )}
           <button
@@ -110,7 +124,7 @@ export function CinemaBrowseView({
             className="btn-primary"
             onClick={onResetFilters}
           >
-            Show All Cinemas
+            {lang === 'zh' ? '查看全部影院' : 'Show All Cinemas'}
           </button>
         </div>
       </div>
@@ -200,10 +214,12 @@ export function CinemaBrowseView({
                     <span className="vibe-tag vibe-tag--prominent">{cinema.vibe}</span>
                     <span className="cinema-card__suburb">
                       <MapPin size={13} aria-hidden="true" />
-                      {cinema.suburb} · {formatDistanceKm(dist.km)} {dist.fullSuffix}
+                      {cinema.suburb} · {formatDistanceKm(dist.km, lang)} {dist.fullSuffix}
                     </span>
                     <span className="cinema-card__screens">
-                      {cinema.screenCount} {cinema.screenCount === 1 ? 'screen' : 'screens'}
+                      {lang === 'zh'
+                        ? `${cinema.screenCount} 个影厅`
+                        : `${cinema.screenCount} ${cinema.screenCount === 1 ? 'screen' : 'screens'}`}
                     </span>
                   </div>
 
@@ -297,13 +313,14 @@ export function CinemaBrowseView({
                           <span className="rating-badge">{movie.classification}</span>
                           <span>
                             <Clock size={12} aria-hidden="true" />{' '}
-                            {formatRuntime(movie.runtimeMinutes)}
+                            {formatRuntime(movie.runtimeMinutes, lang)}
                           </span>
                           <span>{movie.genres.slice(0, 2).join(' · ')}</span>
                         </p>
                         <div className="programme-film-row__ratings">
                           <RatingsPillBar
                             movie={movie}
+                            lang={lang}
                             compact
                             contextKey={cinema.id}
                             onInspectRatings={onInspectRatings}

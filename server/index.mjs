@@ -2,6 +2,7 @@ import http from 'node:http';
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import zlib from 'node:zlib';
 import {
   CACHE_DIR,
   CACHE_FILE,
@@ -15,18 +16,66 @@ import { searchLocationsForQuery } from './geocode.mjs';
 // Cryptographic synchronizer CSRF token generated per server boot (never hardcoded).
 const SERVER_CSRF_TOKEN = crypto.randomBytes(32).toString('hex');
 
-// Per-IP token bucket rate limiter (60 requests / minute)
+const SAFE_IP_REGEX = /^[0-9a-fA-F:.]{3,64}$/;
+const MAX_RATE_BUCKETS = 2000;
+
+function resolveClientIp(req) {
+  const cfIp = typeof req.headers['cf-connecting-ip'] === 'string' ? req.headers['cf-connecting-ip'].trim() : '';
+  if (cfIp && SAFE_IP_REGEX.test(cfIp)) return cfIp;
+
+  const xff = typeof req.headers['x-forwarded-for'] === 'string' ? req.headers['x-forwarded-for'] : '';
+  if (xff) {
+    const firstHop = xff.split(',')[0].trim();
+    if (firstHop && SAFE_IP_REGEX.test(firstHop)) return firstHop;
+  }
+
+  return req.socket.remoteAddress || '127.0.0.1';
+}
+
+// Per-IP token bucket rate limiter (120 requests / minute, bounded eviction)
 const rateBuckets = new Map();
 function allowRateLimit(remoteIp) {
   const now = Date.now();
+  if (rateBuckets.size >= MAX_RATE_BUCKETS) {
+    for (const [ip, b] of rateBuckets.entries()) {
+      if (now - b.windowStart > 60_000) rateBuckets.delete(ip);
+    }
+    while (rateBuckets.size >= MAX_RATE_BUCKETS) {
+      const oldest = rateBuckets.keys().next().value;
+      if (oldest === undefined) break;
+      rateBuckets.delete(oldest);
+    }
+  }
   const entry = rateBuckets.get(remoteIp);
   if (!entry || now - entry.windowStart > 60_000) {
     rateBuckets.set(remoteIp, { windowStart: now, count: 1 });
     return true;
   }
-  if (entry.count >= 60) return false;
+  if (entry.count >= 120) return false;
   entry.count += 1;
   return true;
+}
+
+const COMPRESSIBLE_EXTS = new Set(['.html', '.js', '.mjs', '.css', '.json', '.svg', '.webmanifest']);
+
+function negotiateCompression(req, rawBuf) {
+  if (rawBuf.length < 1024) return { body: rawBuf, encoding: null };
+  const ae = String(req.headers['accept-encoding'] || '');
+  if (/\bbr\b/i.test(ae)) {
+    return {
+      body: zlib.brotliCompressSync(rawBuf, {
+        params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 4 },
+      }),
+      encoding: 'br',
+    };
+  }
+  if (/\bgzip\b/i.test(ae)) {
+    return {
+      body: zlib.gzipSync(rawBuf, { level: 6 }),
+      encoding: 'gzip',
+    };
+  }
+  return { body: rawBuf, encoding: null };
 }
 
 const DIST_DIR = path.join(PROJECT_ROOT, 'dist');
@@ -54,10 +103,11 @@ const STATIC_MIME_TYPES = {
 
 const SPA_SECURITY_HEADERS = {
   'X-Content-Type-Options': 'nosniff',
+  'X-Frame-Options': 'SAMEORIGIN',
   'Referrer-Policy': 'strict-origin-when-cross-origin',
   'Permissions-Policy': 'camera=(), microphone=(), geolocation=(self)',
   'Content-Security-Policy':
-    "default-src 'self'; script-src 'self'; worker-src 'self'; manifest-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' https://image.tmdb.org https://*.basemaps.cartocdn.com data:; connect-src 'self'; frame-src https://www.youtube-nocookie.com https://www.youtube.com; frame-ancestors 'self'; object-src 'none'; base-uri 'self';",
+    "default-src 'self'; script-src 'self'; worker-src 'self'; manifest-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' https://image.tmdb.org https://server.arcgisonline.com data:; connect-src 'self'; frame-src https://www.youtube-nocookie.com https://www.youtube.com; frame-ancestors 'self'; object-src 'none'; base-uri 'self';",
 };
 
 function isAllowedOrigin(origin, requestHostHeader) {
@@ -141,6 +191,8 @@ function readBoundedJsonBody(req, maxBytes = 4096) {
 // any multi-tenant write features.
 function writeJson(req, res, statusCode, payload, extraHeaders = {}) {
   const origin = req.headers.origin;
+  const rawBuf = Buffer.from(JSON.stringify(payload), 'utf-8');
+  const varyParts = ['Accept-Encoding'];
   const headers = {
     'Content-Type': 'application/json; charset=utf-8',
     'Cache-Control': 'no-store',
@@ -153,10 +205,28 @@ function writeJson(req, res, statusCode, payload, extraHeaders = {}) {
   };
   if (origin && isAllowedOrigin(origin, req.headers.host)) {
     headers['Access-Control-Allow-Origin'] = origin;
-    headers['Vary'] = 'Origin';
+    varyParts.push('Origin');
   }
+  headers['Vary'] = varyParts.join(', ');
+
+  const etag = headers['ETag'];
+  if (etag && req.headers['if-none-match'] === etag && (req.method === 'GET' || req.method === 'HEAD')) {
+    res.writeHead(304, headers);
+    res.end();
+    return;
+  }
+
+  const { body, encoding } = negotiateCompression(req, rawBuf);
+  if (encoding) {
+    headers['Content-Encoding'] = encoding;
+  }
+  headers['Content-Length'] = String(body.length);
   res.writeHead(statusCode, headers);
-  res.end(JSON.stringify(payload));
+  if (req.method === 'HEAD') {
+    res.end();
+    return;
+  }
+  res.end(body);
 }
 
 async function writeValidatedEnvKeys({
@@ -347,7 +417,15 @@ function injectDynamicOpenGraphTags(htmlText, req) {
 
   if (baseOrigin) {
     const absImage = escapeHtmlAttr(`${baseOrigin}/og-reelhouse.jpg`);
+    const safeCanonicalParams = new URLSearchParams();
+    if (cityParam === 'melbourne' || cityParam === 'sydney' || cityParam === 'shanghai') {
+      safeCanonicalParams.set('city', cityParam);
+    }
+    const qs = safeCanonicalParams.toString();
+    const absCanonical = escapeHtmlAttr(`${baseOrigin}/${qs ? `?${qs}` : ''}`);
     out = out
+      .replace(/(rel="canonical"\s+href=")[^"]*(")/, `$1${absCanonical}$2`)
+      .replace(/(property="og:url"\s+content=")[^"]*(")/, `$1${absCanonical}$2`)
       .replace(/(property="og:image"\s+content=")[^"]*(")/, `$1${absImage}$2`)
       .replace(/(name="twitter:image"\s+content=")[^"]*(")/, `$1${absImage}$2`);
   }
@@ -391,18 +469,48 @@ async function serveStaticSpaAsset(req, res, pathname) {
   }
 
   try {
-    let body = await fs.readFile(fileToServe);
+    const stat = await fs.stat(fileToServe);
+    let rawBody = await fs.readFile(fileToServe);
     const ext = path.extname(fileToServe).toLowerCase();
     if (fileToServe === indexHtmlPath) {
-      body = Buffer.from(injectDynamicOpenGraphTags(body.toString('utf-8'), req), 'utf-8');
+      rawBody = Buffer.from(injectDynamicOpenGraphTags(rawBody.toString('utf-8'), req), 'utf-8');
     }
     const contentType = STATIC_MIME_TYPES[ext] || 'application/octet-stream';
     const isHashedAsset = decodedPath.startsWith('/assets/');
-    res.writeHead(200, {
+    const etag =
+      fileToServe === indexHtmlPath
+        ? `W/"${crypto.createHash('sha1').update(rawBody).digest('hex').slice(0, 16)}"`
+        : `W/"${stat.size.toString(16)}-${Math.floor(stat.mtimeMs).toString(16)}"`;
+
+    const headers = {
       'Content-Type': contentType,
       'Cache-Control': isHashedAsset ? 'public, max-age=31536000, immutable' : 'no-cache',
+      ETag: etag,
+      'Last-Modified': stat.mtime.toUTCString(),
+      Vary: 'Accept-Encoding',
       ...SPA_SECURITY_HEADERS,
-    });
+    };
+
+    if (req.headers['if-none-match'] === etag) {
+      res.writeHead(304, headers);
+      res.end();
+      return;
+    }
+
+    const shouldCompress = COMPRESSIBLE_EXTS.has(ext);
+    const { body, encoding } = shouldCompress
+      ? negotiateCompression(req, rawBody)
+      : { body: rawBody, encoding: null };
+    if (encoding) {
+      headers['Content-Encoding'] = encoding;
+    }
+    headers['Content-Length'] = String(body.length);
+
+    res.writeHead(200, headers);
+    if (req.method === 'HEAD') {
+      res.end();
+      return;
+    }
     res.end(body);
   } catch {
     res.writeHead(503, { 'Content-Type': 'text/plain; charset=utf-8', ...SPA_SECURITY_HEADERS });
@@ -411,7 +519,7 @@ async function serveStaticSpaAsset(req, res, pathname) {
 }
 
 const server = http.createServer(async (req, res) => {
-  const remoteIp = req.socket.remoteAddress || '127.0.0.1';
+  const remoteIp = resolveClientIp(req);
   if (!allowRateLimit(remoteIp)) {
     writeJson(req, res, 429, { error: 'Too many requests' });
     return;
@@ -428,8 +536,9 @@ const server = http.createServer(async (req, res) => {
   }
 
   const parsedUrl = new URL(req.url || '/', 'http://127.0.0.1');
+  const isReadMethod = req.method === 'GET' || req.method === 'HEAD';
 
-  if (req.method === 'GET' && parsedUrl.pathname === '/api/healthz') {
+  if (isReadMethod && parsedUrl.pathname === '/api/healthz') {
     writeJson(req, res, 200, { ok: true });
     return;
   }
@@ -444,7 +553,7 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  if (req.method === 'GET' && parsedUrl.pathname === '/api/status') {
+  if (isReadMethod && parsedUrl.pathname === '/api/status') {
     const cfg = await getApiConfig();
     const isHttps = req.headers['x-forwarded-proto'] === 'https';
     const cookieFlags = `Path=/; HttpOnly; SameSite=Lax${isHttps ? '; Secure' : ''}`;
@@ -478,10 +587,15 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  if (req.method === 'GET' && parsedUrl.pathname === '/api/catalog') {
+  if (isReadMethod && parsedUrl.pathname === '/api/catalog') {
     try {
       const data = await getCachedOrFreshCatalog(false);
-      writeJson(req, res, 200, data);
+      const etagSeed = `${data.syncedAtIso || ''}:${data.ratingsSyncedAtIso || ''}:${Array.isArray(data.sessions) ? data.sessions.length : 0}:${Array.isArray(data.movies) ? data.movies.length : 0}`;
+      const catalogEtag = `W/"${crypto.createHash('sha1').update(etagSeed).digest('hex').slice(0, 16)}"`;
+      writeJson(req, res, 200, data, {
+        'Cache-Control': 'public, max-age=60, must-revalidate',
+        ETag: catalogEtag,
+      });
     } catch {
       writeJson(req, res, 502, {
         mode: 'curated',

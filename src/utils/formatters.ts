@@ -33,6 +33,13 @@ const kilometerFormatter = new Intl.NumberFormat('en-AU', {
   maximumFractionDigits: 1,
 });
 
+const kilometerFormatterZh = new Intl.NumberFormat('zh-CN', {
+  style: 'unit',
+  unit: 'kilometer',
+  unitDisplay: 'short',
+  maximumFractionDigits: 1,
+});
+
 const percentFormatter = new Intl.NumberFormat('en-AU', {
   style: 'percent',
   maximumFractionDigits: 0,
@@ -44,6 +51,11 @@ const tenPointScoreFormatter = new Intl.NumberFormat('en-AU', {
 });
 
 const compactCountFormatter = new Intl.NumberFormat('en-AU', {
+  notation: 'compact',
+  maximumFractionDigits: 1,
+});
+
+const compactCountFormatterZh = new Intl.NumberFormat('zh-CN', {
   notation: 'compact',
   maximumFractionDigits: 1,
 });
@@ -64,6 +76,18 @@ const minuteUnitFormatter = new Intl.NumberFormat('en-AU', {
   unitDisplay: 'narrow',
 });
 
+const hourUnitFormatterZh = new Intl.NumberFormat('zh-CN', {
+  style: 'unit',
+  unit: 'hour',
+  unitDisplay: 'short',
+});
+
+const minuteUnitFormatterZh = new Intl.NumberFormat('zh-CN', {
+  style: 'unit',
+  unit: 'minute',
+  unitDisplay: 'short',
+});
+
 export function formatAud(amount: number, compactWhole = false): string {
   if (compactWhole && Number.isInteger(amount)) {
     return audWholeCurrencyFormatter.format(amount);
@@ -82,8 +106,8 @@ export function formatSessionPrice(
   return formatAud(amount, compactWhole);
 }
 
-export function formatDistanceKm(kilometers: number): string {
-  return kilometerFormatter.format(kilometers);
+export function formatDistanceKm(kilometers: number, lang: AppLanguage = 'en'): string {
+  return (lang === 'zh' ? kilometerFormatterZh : kilometerFormatter).format(kilometers);
 }
 
 export function formatPercent(score0to100: number): string {
@@ -94,24 +118,28 @@ export function formatTenPointScore(score0to10: number): string {
   return tenPointScoreFormatter.format(score0to10);
 }
 
-export function formatCompactCount(count: number): string {
-  return compactCountFormatter.format(count);
+export function formatCompactCount(count: number, lang: AppLanguage = 'en'): string {
+  return (lang === 'zh' ? compactCountFormatterZh : compactCountFormatter).format(count);
 }
 
 export function formatExactCount(count: number): string {
   return exactCountFormatter.format(count);
 }
 
-export function formatRuntime(totalMinutes: number): string {
+export function formatRuntime(totalMinutes: number, lang: AppLanguage = 'en'): string {
   const hours = Math.floor(totalMinutes / 60);
   const mins = totalMinutes % 60;
+  const hFmt = lang === 'zh' ? hourUnitFormatterZh : hourUnitFormatter;
+  const mFmt = lang === 'zh' ? minuteUnitFormatterZh : minuteUnitFormatter;
   if (hours <= 0) {
-    return minuteUnitFormatter.format(mins);
+    return mFmt.format(mins);
   }
   if (mins === 0) {
-    return hourUnitFormatter.format(hours);
+    return hFmt.format(hours);
   }
-  return `${hourUnitFormatter.format(hours)} ${minuteUnitFormatter.format(mins)}`;
+  return lang === 'zh'
+    ? `${hFmt.format(hours)}${mFmt.format(mins)}`
+    : `${hFmt.format(hours)} ${mFmt.format(mins)}`;
 }
 
 /**
@@ -181,15 +209,16 @@ export function formatSessionWindow(
 }
 
 /**
- * Formats an upcoming release date (YYYY-MM-DD) in Australian English, e.g. "26 November 2026".
+ * Formats an upcoming release date (YYYY-MM-DD) using locale-aware Intl.DateTimeFormat.
  */
 export function formatAustralianReleaseDate(
   dateIso: string,
-  timeZone: CityTimeZone
+  timeZone: CityTimeZone,
+  lang: AppLanguage = 'en'
 ): string {
   const [year, month, day] = dateIso.split('-').map(Number);
   const safeUtcAnchor = new Date(Date.UTC(year, month - 1, day, 2, 0, 0));
-  return new Intl.DateTimeFormat('en-AU', {
+  return new Intl.DateTimeFormat(lang === 'zh' ? 'zh-CN' : 'en-AU', {
     day: 'numeric',
     month: 'long',
     year: 'numeric',
@@ -198,7 +227,8 @@ export function formatAustralianReleaseDate(
 }
 
 /**
- * Computes whole days between local today (YYYY-MM-DD) and an upcoming release date (YYYY-MM-DD).
+ * Computes signed whole days between local today (YYYY-MM-DD) and a release date (YYYY-MM-DD).
+ * Returns negative values for dates already in the past so callers never mislabel them as releasing today.
  */
 export function getDaysUntilRelease(
   releaseDateIso: string,
@@ -209,7 +239,7 @@ export function getDaysUntilRelease(
   const [ry, rm, rd] = releaseDateIso.split('-').map(Number);
   const todayMs = Date.UTC(ty, tm - 1, td);
   const releaseMs = Date.UTC(ry, rm - 1, rd);
-  return Math.max(0, Math.round((releaseMs - todayMs) / 86_400_000));
+  return Math.round((releaseMs - todayMs) / 86_400_000);
 }
 
 /**
