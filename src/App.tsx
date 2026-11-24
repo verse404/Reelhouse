@@ -588,11 +588,9 @@ export function App() {
         mode === 'gallery' && prev.browseMode === 'gallery' && prev.selectedMovieId !== 'all'
           ? 'all'
           : prev.selectedMovieId,
-      // Gallery & Map views display currently screening films; exit Coming Soon automatically
+      // Map view displays live screening sessions; exit Coming Soon automatically if user clicks Map
       releaseStatus:
-        (mode === 'map' || mode === 'gallery') && prev.releaseStatus === 'coming_soon'
-          ? 'in_cinemas'
-          : prev.releaseStatus,
+        mode === 'map' && prev.releaseStatus === 'coming_soon' ? 'in_cinemas' : prev.releaseStatus,
     }));
   };
 
@@ -1245,8 +1243,22 @@ export function App() {
     });
   };
 
-  // Coming Soon filtered items for the active city
-  const comingSoonItems = useMemo<ComingSoonMovieItem[]>(() => {
+  const handlePickComingSoonMovie = (movieId: string) => {
+    handleUpdateFilters({
+      browseMode: 'gallery',
+      releaseStatus: 'coming_soon',
+      selectedMovieId: movieId,
+    });
+    window.requestAnimationFrame(() => {
+      document.getElementById('movie-gallery-top')?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'start',
+      });
+    });
+  };
+
+  // Coming Soon filtered items for the active city (all matching films before single-film selection)
+  const comingSoonGalleryItems = useMemo<ComingSoonMovieItem[]>(() => {
     const query = filters.searchQuery.trim().toLowerCase();
     const results: ComingSoonMovieItem[] = [];
 
@@ -1257,7 +1269,6 @@ export function App() {
       ) {
         continue;
       }
-      if (filters.selectedMovieId !== 'all' && movie.id !== filters.selectedMovieId) continue;
       if (filters.genre !== 'all' && !movie.genres.includes(filters.genre)) continue;
       if (filters.minRating === 'imdb8' && (movie.ratings.imdb.score ?? 0) < 8.0) continue;
       if (
@@ -1318,6 +1329,11 @@ export function App() {
 
     return results;
   }, [comingSoonMovies, filters, allCinemasMap, favoriteCinemaIds, userOrigin, cityMeta.timeZone]);
+
+  const comingSoonItems = useMemo<ComingSoonMovieItem[]>(() => {
+    if (filters.selectedMovieId === 'all') return comingSoonGalleryItems;
+    return comingSoonGalleryItems.filter((item) => item.movie.id === filters.selectedMovieId);
+  }, [comingSoonGalleryItems, filters.selectedMovieId]);
 
   const watchlistedIds = useMemo(() => new Set(watchlist), [watchlist]);
 
@@ -1435,7 +1451,11 @@ export function App() {
         isLiveMode={syncStatus.mode === 'live'}
         shortlistCount={hydratedShortlist.length}
         matchingSessionCount={filteredSessions.length}
-        comingSoonCount={comingSoonItems.length}
+        comingSoonCount={
+          filters.browseMode === 'gallery'
+            ? comingSoonGalleryItems.length
+            : comingSoonItems.length
+        }
         onChangeCity={handleChangeCity}
         onToggleLanguage={handleToggleLanguage}
         onChangeReleaseStatus={handleChangeReleaseStatus}
@@ -1477,7 +1497,11 @@ export function App() {
           inCinemasFilmCount={
             filters.browseMode === 'gallery' ? galleryMovies.length : movieBrowseItems.length
           }
-          comingSoonFilmCount={comingSoonItems.length}
+          comingSoonFilmCount={
+            filters.browseMode === 'gallery'
+              ? comingSoonGalleryItems.length
+              : comingSoonItems.length
+          }
           onUpdateFilters={handleUpdateFilters}
           onSelectNearHub={handleSelectNearHub}
           onRequestGps={handleOpenLocationModal}
@@ -1486,7 +1510,7 @@ export function App() {
           onResetFilters={handleResetFilters}
         />
 
-        {!(filters.releaseStatus === 'in_cinemas' && filters.browseMode === 'gallery' && selectedGalleryMovie) && (
+        {!(filters.browseMode === 'gallery' && filters.selectedMovieId !== 'all') && (
           <ClosestCinemasSpotlight
             cinemas={cityCinemas}
             sessions={spotlightDaySessions}
@@ -1503,12 +1527,17 @@ export function App() {
         {filters.releaseStatus === 'coming_soon' ? (
           <ComingSoonView
             items={comingSoonItems}
+            allGalleryItems={comingSoonGalleryItems}
+            selectedMovieId={filters.selectedMovieId}
             cityMeta={cityMeta}
             lang={lang}
             userOrigin={userOrigin}
             browseMode={filters.browseMode}
             watchlistedIds={watchlistedIds}
             favoriteCinemaIds={favoriteCinemaIds}
+            onPickMovie={handlePickComingSoonMovie}
+            onBackToAllMovies={handleBackToAllMovies}
+            onSwitchToFullSchedule={() => handleChangeBrowseMode('movies')}
             onToggleWatchlist={handleToggleWatchlist}
             onToggleFavoriteCinema={handleToggleFavoriteCinema}
             onInspectRatings={setInspectedRatingsMovie}
