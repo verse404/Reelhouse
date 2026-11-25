@@ -85,6 +85,26 @@ const PUBLIC_READONLY_MODE = process.env.PUBLIC_READONLY_MODE === '1';
 // and delegate all daily scraping/syncing to GitHub Actions (.github/workflows/daily-catalog-sync.yml).
 const GITHUB_CRON_MANAGED = process.env.GITHUB_CRON_MANAGED === '1';
 
+const REMOTE_CATALOG_POLL_MS =
+  Math.max(5, Number.parseInt(process.env.REMOTE_CATALOG_POLL_MINUTES || '30', 10) || 30) * 60_000;
+const REMOTE_CATALOG_ERROR_RETRY_MS = 2 * 60_000;
+const MAX_REMOTE_CATALOG_BYTES = 20 * 1024 * 1024;
+
+function parseAllowedRemoteCatalogUrl(rawUrl) {
+  if (!rawUrl || typeof rawUrl !== 'string') return null;
+  try {
+    const u = new URL(rawUrl.trim());
+    if (u.protocol !== 'https:') return null;
+    if (u.hostname.toLowerCase() !== 'raw.githubusercontent.com') return null;
+    if (!u.pathname.endsWith('.json')) return null;
+    return u.toString();
+  } catch {
+    return null;
+  }
+}
+
+const REMOTE_CATALOG_URL = parseAllowedRemoteCatalogUrl(process.env.REMOTE_CATALOG_URL);
+
 const STATIC_MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'application/javascript; charset=utf-8',
@@ -270,6 +290,116 @@ async function writeValidatedEnvKeys({
 
 let inFlightSync = null;
 let inFlightRatingsRefresh = null;
+let remoteCatalogCache = null;
+let remoteCatalogEtag = null;
+let remoteCatalogCheckedAtMs = 0;
+let remoteCatalogNextCheckAfterMs = 0;
+let hasCompletedInitialRemoteCheck = false;
+let inFlightRemoteFetch = null;
+
+function isValidCatalogSnapshot(candidate) {
+  return Boolean(
+    candidate &&
+      typeof candidate === 'object' &&
+      candidate.mode === 'live' &&
+      Array.isArray(candidate.movies) &&
+      candidate.movies.length > 0 &&
+      Array.isArray(candidate.sessions) &&
+      candidate.sessions.length > 0
+  );
+}
+
+function getSyncedAtTimestampMs(snapshot) {
+  const ts = snapshot?.syncedAtIso ? Date.parse(snapshot.syncedAtIso) : Number.NaN;
+  return Number.isFinite(ts) ? ts : 0;
+}
+
+function pickFresherSnapshot(localSnap, remoteSnap) {
+  if (!isValidCatalogSnapshot(remoteSnap)) return localSnap;
+  if (!isValidCatalogSnapshot(localSnap)) return remoteSnap;
+  return getSyncedAtTimestampMs(remoteSnap) >= getSyncedAtTimestampMs(localSnap)
+    ? remoteSnap
+    : localSnap;
+}
+
+async function refreshRemoteCatalog(currentSnapshot = null) {
+  if (!REMOTE_CATALOG_URL) return null;
+  if (inFlightRemoteFetch) return inFlightRemoteFetch;
+
+  inFlightRemoteFetch = (async () => {
+    const now = Date.now();
+    try {
+      const headers = {
+        Accept: 'application/json',
+        'User-Agent': 'Reelhouse-BFF/1.0',
+      };
+      if (remoteCatalogEtag) {
+        headers['If-None-Match'] = remoteCatalogEtag;
+      }
+
+      const res = await fetch(REMOTE_CATALOG_URL, {
+        method: 'GET',
+        headers,
+        signal: AbortSignal.timeout(8000),
+      });
+
+      remoteCatalogCheckedAtMs = Date.now();
+      remoteCatalogNextCheckAfterMs = remoteCatalogCheckedAtMs + REMOTE_CATALOG_POLL_MS;
+      hasCompletedInitialRemoteCheck = true;
+
+      if (res.status === 304) {
+        return remoteCatalogCache;
+      }
+      if (!res.ok) {
+        remoteCatalogNextCheckAfterMs = Date.now() + REMOTE_CATALOG_ERROR_RETRY_MS;
+        return remoteCatalogCache;
+      }
+
+      const contentLen = Number.parseInt(res.headers.get('content-length') || '0', 10);
+      if (Number.isFinite(contentLen) && contentLen > MAX_REMOTE_CATALOG_BYTES) {
+        return remoteCatalogCache;
+      }
+
+      const text = await res.text();
+      if (Buffer.byteLength(text, 'utf8') > MAX_REMOTE_CATALOG_BYTES) {
+        return remoteCatalogCache;
+      }
+
+      const parsed = JSON.parse(text);
+      if (!isValidCatalogSnapshot(parsed)) {
+        return remoteCatalogCache;
+      }
+
+      const etag = res.headers.get('etag');
+      if (etag) remoteCatalogEtag = etag;
+
+      const best = pickFresherSnapshot(currentSnapshot || remoteCatalogCache, parsed);
+      remoteCatalogCache = best;
+
+      // Persist to container's local cache file atomically when writable
+      if (best === parsed) {
+        try {
+          await fs.mkdir(CACHE_DIR, { recursive: true });
+          const tmpPath = `${CACHE_FILE}.remote.tmp`;
+          await fs.writeFile(tmpPath, text, 'utf-8');
+          await fs.rename(tmpPath, CACHE_FILE);
+        } catch {
+          // Non-fatal on read-only filesystems; in-memory remoteCatalogCache stays fresh
+        }
+      }
+      return remoteCatalogCache;
+    } catch {
+      remoteCatalogCheckedAtMs = now;
+      remoteCatalogNextCheckAfterMs = Date.now() + REMOTE_CATALOG_ERROR_RETRY_MS;
+      hasCompletedInitialRemoteCheck = true;
+      return remoteCatalogCache;
+    } finally {
+      inFlightRemoteFetch = null;
+    }
+  })();
+
+  return inFlightRemoteFetch;
+}
 
 async function getCachedOrFreshCatalog(forceSync = false) {
   const cfg = await getApiConfig();
@@ -281,32 +411,67 @@ async function getCachedOrFreshCatalog(forceSync = false) {
   };
 
   if (!forceSync) {
+    let localParsed = null;
+    let localStatMtimeMs = 0;
     try {
       const stat = await fs.stat(CACHE_FILE);
+      localStatMtimeMs = stat.mtimeMs;
       const raw = await fs.readFile(CACHE_FILE, 'utf-8');
-      const parsed = JSON.parse(raw);
-      parsed.configuredApis = {
-        tmdb: Boolean(cfg.tmdbApiKey || parsed.configuredApis?.tmdb),
-        omdb: Boolean(cfg.omdbApiKey || parsed.configuredApis?.omdb),
-        mdblist: Boolean(cfg.mdblistApiKey || parsed.configuredApis?.mdblist),
-        serpapi: Boolean(cfg.serpapiApiKey || parsed.configuredApis?.serpapi),
+      localParsed = JSON.parse(raw);
+    } catch {
+      // Fall through if CACHE_FILE does not exist yet
+    }
+
+    // When managed by GitHub Actions daily cron (Render Free Tier), optionally pull the latest
+    // catalog from GitHub Raw on cold wake & periodically while awake (0 Render build minutes for data syncs),
+    // while still sleeping cleanly after 15m idle with no background timers.
+    if (GITHUB_CRON_MANAGED) {
+      if (REMOTE_CATALOG_URL) {
+        const shouldCheckRemote =
+          !hasCompletedInitialRemoteCheck || Date.now() >= remoteCatalogNextCheckAfterMs;
+        if (shouldCheckRemote) {
+          const fetchPromise = refreshRemoteCatalog(localParsed);
+          if (!hasCompletedInitialRemoteCheck) {
+            await Promise.race([
+              fetchPromise,
+              new Promise((resolve) => setTimeout(resolve, 2500)),
+            ]);
+          }
+        }
+      }
+
+      const resolved = pickFresherSnapshot(localParsed, remoteCatalogCache);
+      if (resolved) {
+        resolved.configuredApis = {
+          tmdb: Boolean(cfg.tmdbApiKey || resolved.configuredApis?.tmdb),
+          omdb: Boolean(cfg.omdbApiKey || resolved.configuredApis?.omdb),
+          mdblist: Boolean(cfg.mdblistApiKey || resolved.configuredApis?.mdblist),
+          serpapi: Boolean(cfg.serpapiApiKey || resolved.configuredApis?.serpapi),
+        };
+        return resolved;
+      }
+    }
+
+    if (localParsed) {
+      localParsed.configuredApis = {
+        tmdb: Boolean(cfg.tmdbApiKey || localParsed.configuredApis?.tmdb),
+        omdb: Boolean(cfg.omdbApiKey || localParsed.configuredApis?.omdb),
+        mdblist: Boolean(cfg.mdblistApiKey || localParsed.configuredApis?.mdblist),
+        serpapi: Boolean(cfg.serpapiApiKey || localParsed.configuredApis?.serpapi),
       };
 
-      // When managed by GitHub Actions daily cron (Render Free Tier), serve the pre-baked
-      // catalog immediately in <2ms without running heavy in-container background scrapes,
-      // allowing Render to sleep cleanly when idle and preserve shared 750h/mo account hours.
-      if (GITHUB_CRON_MANAGED || !cfg.tmdbApiKey) {
-        return parsed;
+      if (!cfg.tmdbApiKey) {
+        return localParsed;
       }
 
       // Always measure true catalog age from syncedAtIso inside JSON rather than disk mtime
       // (container builds and git checkouts reset file mtime even when data is days old).
-      const ageHours = parsed.syncedAtIso
-        ? (Date.now() - Date.parse(parsed.syncedAtIso)) / 3_600_000
-        : (Date.now() - stat.mtimeMs) / 3_600_000;
+      const ageHours = localParsed.syncedAtIso
+        ? (Date.now() - Date.parse(localParsed.syncedAtIso)) / 3_600_000
+        : (Date.now() - localStatMtimeMs) / 3_600_000;
 
-      const ratingsAgeHours = parsed.ratingsSyncedAtIso
-        ? (Date.now() - Date.parse(parsed.ratingsSyncedAtIso)) / 3_600_000
+      const ratingsAgeHours = localParsed.ratingsSyncedAtIso
+        ? (Date.now() - Date.parse(localParsed.ratingsSyncedAtIso)) / 3_600_000
         : ageHours;
 
       if (ageHours >= cfg.cacheTtlHours && !inFlightSync) {
@@ -318,7 +483,7 @@ async function getCachedOrFreshCatalog(forceSync = false) {
         !inFlightSync &&
         !inFlightRatingsRefresh
       ) {
-        // Independent 6-hour background refresh of IMDb + MDBList RT + Douban scores (0 SerpApi cost)
+        // Independent background refresh of IMDb + MDBList RT + Douban scores (0 SerpApi cost)
         inFlightRatingsRefresh = refreshCachedCatalogRatings({
           cacheFile: CACHE_FILE,
           cacheDir: CACHE_DIR,
@@ -330,9 +495,7 @@ async function getCachedOrFreshCatalog(forceSync = false) {
             inFlightRatingsRefresh = null;
           });
       }
-      return parsed;
-    } catch {
-      // Fall through if CACHE_FILE does not exist yet
+      return localParsed;
     }
   }
 
@@ -539,7 +702,11 @@ const server = http.createServer(async (req, res) => {
   const isReadMethod = req.method === 'GET' || req.method === 'HEAD';
 
   if (isReadMethod && parsedUrl.pathname === '/api/healthz') {
-    writeJson(req, res, 200, { ok: true });
+    writeJson(req, res, 200, {
+      ok: true,
+      remoteCatalogEnabled: Boolean(REMOTE_CATALOG_URL),
+      syncedAtIso: remoteCatalogCache?.syncedAtIso || null,
+    });
     return;
   }
 
@@ -740,6 +907,12 @@ server.listen(PORT, BIND_HOST, () => {
   console.log(
     `[Reelhouse BFF] Listening on http://${BIND_HOST}:${PORT} (mode=${hasTmdb ? 'live-ready' : 'curated-fallback'}, static=${SERVE_STATIC})`
   );
+
+  // On Render Free Tier with remote catalog configured, warm the GitHub Raw snapshot right on boot
+  // (no recurring setInterval timer so Render still sleeps cleanly after 15m idle).
+  if (GITHUB_CRON_MANAGED && REMOTE_CATALOG_URL) {
+    refreshRemoteCatalog(null).catch(() => null);
+  }
 
   // Built-in proactive daily session refresh for standalone local/dedicated servers.
   // Disabled automatically when GITHUB_CRON_MANAGED=1 (Render Free Tier) so Render sleeps cleanly

@@ -39,6 +39,12 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Seed previous catalog from catalog-data branch (for smart carry-forward)
+        run: |
+          if git fetch origin catalog-data --depth=1 2>/dev/null; then
+            git checkout FETCH_HEAD -- server/cache/live_catalog.json || true
+          fi
+
       - name: Pull fresh daily cinema sessions & film ratings
         env:
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
@@ -58,14 +64,38 @@ jobs:
           REELHOUSE_WATCH_TITLES: ${{ secrets.REELHOUSE_WATCH_TITLES }}
         run: npm run notify
 
-      - name: Commit and push updated session catalog (triggers Render auto-deploy)
+      - name: Publish updated session catalog to catalog-data branch (0 Render rebuilds)
         run: |
-          if git diff --quiet -- server/cache/live_catalog.json public/live_catalog.json; then
+          STAGE_DIR="$(mktemp -d)"
+          mkdir -p "$STAGE_DIR/server/cache" "$STAGE_DIR/public"
+          cp server/cache/live_catalog.json "$STAGE_DIR/server/cache/live_catalog.json"
+          cp public/live_catalog.json "$STAGE_DIR/public/live_catalog.json"
+          for city in melbourne sydney shanghai; do
+            if [ -f "public/live_catalog_${city}.json" ]; then
+              cp "public/live_catalog_${city}.json" "$STAGE_DIR/public/live_catalog_${city}.json"
+            fi
+          done
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          if git fetch origin catalog-data --depth=1 2>/dev/null; then
+            git checkout -B catalog-data FETCH_HEAD
+          else
+            git checkout --orphan catalog-data
+            git rm -rf --cached . >/dev/null 2>&1 || true
+            find . -mindepth 1 -maxdepth 1 ! -name '.git' -exec rm -rf {} +
+          fi
+
+          mkdir -p server/cache public
+          cp "$STAGE_DIR/server/cache/live_catalog.json" server/cache/live_catalog.json
+          cp "$STAGE_DIR/public/"live_catalog*.json public/
+          rm -rf "$STAGE_DIR"
+
+          git add server/cache/live_catalog.json public/live_catalog*.json
+          if git diff --cached --quiet; then
             echo "No catalog changes detected."
             exit 0
           fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add server/cache/live_catalog.json public/live_catalog.json
           git commit -m "chore(catalog): automated daily cinema session & ratings sync"
-          git push origin HEAD:main
+          git push origin HEAD:catalog-data

@@ -21,6 +21,10 @@ services:
         value: "1"
       - key: GITHUB_CRON_MANAGED
         value: "1"
+      - key: REMOTE_CATALOG_URL
+        value: "https://raw.githubusercontent.com/verse404/Reelhouse/catalog-data/server/cache/live_catalog.json"
+      - key: REMOTE_CATALOG_POLL_MINUTES
+        value: "30"
       - key: CACHE_TTL_HOURS
         value: "24"
       - key: RATINGS_TTL_HOURS
