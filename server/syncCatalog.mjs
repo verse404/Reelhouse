@@ -1458,6 +1458,17 @@ function createFallbackMovieRecord(rawTitle, posterIndex, hintMeta = null) {
   };
 }
 
+function extractChineseCore(str) {
+  return String(str || '')
+    .replace(/[《》「」『』（）()【】[\]·•:：\-–—!！?？,，.。\s]/g, '')
+    .replace(/(?:4k|2k|3d|2d|imax|重映|修复版|国语|原版)$/gi, '')
+    .toLowerCase();
+}
+
+function hasTrailingSequelMarker(str) {
+  return /(?:[2-9]|ii|iii|iv|第[二三四五六七八九]部|之[二三四])$/i.test(String(str || '').trim());
+}
+
 async function resolveMovieViaTmdb(rawTitle, tmdbApiKey, posterIndex, hintMeta = null) {
   const isChineseRaw = /[\u4e00-\u9fff]/.test(String(rawTitle));
   const cleanSearchTitle = String(rawTitle)
@@ -1465,6 +1476,7 @@ async function resolveMovieViaTmdb(rawTitle, tmdbApiKey, posterIndex, hintMeta =
       /^(?:JIFF|MIFF|SFF|SIFF|NT Live|RBO Cinema Season[^:]*|Monroe\s*100|Jodofest|Doctor Who Day|Retrospective|Classic Showcase|Met Opera)\s*[:\-–—]\s*/i,
       ''
     )
+    .replace(/[《》]/g, '')
     .replace(/\b(4K|35mm|70mm|IMAX|Restoration|Preview|Q&A|Anniversary|Re-release)\b/gi, '')
     .replace(/\([^)]*\)/g, '')
     .replace(/（[^）]*）/g, '')
@@ -1474,10 +1486,57 @@ async function resolveMovieViaTmdb(rawTitle, tmdbApiKey, posterIndex, hintMeta =
     const searchUrl = new URL('https://api.themoviedb.org/3/search/movie');
     searchUrl.searchParams.set('api_key', tmdbApiKey);
     searchUrl.searchParams.set('query', cleanSearchTitle || rawTitle);
-    searchUrl.searchParams.set('language', isChineseRaw ? 'en-US' : 'en-AU');
+    searchUrl.searchParams.set('language', isChineseRaw ? 'zh-CN' : 'en-AU');
 
     const searchData = await fetchJsonSafe(searchUrl.toString());
-    const candidates = (searchData.results || []).slice(0, 4);
+    let candidates = (searchData.results || []).slice(0, 8);
+
+    if (isChineseRaw) {
+      const queryCore = extractChineseCore(cleanSearchTitle || rawTitle);
+      const queryHasSequel = hasTrailingSequelMarker(queryCore);
+
+      const scored = candidates
+        .map((c) => {
+          const titleCore = extractChineseCore(c.title || '');
+          const origCore = extractChineseCore(c.original_title || '');
+          const exactMatch =
+            (queryCore.length > 0 && titleCore === queryCore) ||
+            (queryCore.length > 0 && origCore === queryCore);
+          const candHasSequel = hasTrailingSequelMarker(titleCore) || hasTrailingSequelMarker(origCore);
+          const sequelMismatch = !queryHasSequel && candHasSequel;
+
+          // Substring match only acceptable when query has >= 2 Chinese chars and no unwanted sequel marker
+          const subMatch =
+            !sequelMismatch &&
+            queryCore.length >= 2 &&
+            (titleCore.includes(queryCore) ||
+              origCore.includes(queryCore) ||
+              (titleCore.length >= 2 && queryCore.includes(titleCore)));
+
+          if (!exactMatch && !subMatch) return null;
+
+          let score = exactMatch ? 1000 : 200;
+          if (sequelMismatch) score -= 500;
+          const yr = Number.parseInt(String(c.release_date || '').slice(0, 4), 10) || 0;
+          if (yr >= 2024 && yr <= 2027) score += 45;
+          score += Math.min(30, Math.log10(1 + (c.vote_count || 0)) * 8);
+          return { c, score, exactMatch };
+        })
+        .filter(Boolean)
+        .sort((a, b) => b.score - a.score);
+
+      if (scored.length === 0) {
+        // Reject bogus unrelated TMDB hits (e.g., "试探" -> "神探可伦坡") and keep real Maoyan metadata + poster
+        return createFallbackMovieRecord(rawTitle, posterIndex, hintMeta);
+      }
+
+      // If we have exact matches, narrow strictly to exact matches so e.g. 沙丘 never picks 沙丘2
+      const exactOnly = scored.filter((s) => s.exactMatch);
+      candidates = (exactOnly.length > 0 ? exactOnly : scored).slice(0, 4).map((s) => s.c);
+    } else {
+      candidates = candidates.slice(0, 4);
+    }
+
     let chosenHit = candidates[0];
 
     // If Maoyan supplied exact runtimeMinutes (e.g. 102m John Wick vs 169m John Wick 4), pick closest match!
@@ -2017,12 +2076,20 @@ const CN_GENRE_TO_EN = {
 };
 
 async function fetchMaoyanShanghaiVenueData(venue, todayIso) {
-  const cached = await findRecentVenueCache(venue.id, todayIso, 24);
-  if (cached && cached.days && !Array.isArray(cached.days) && Array.isArray(cached.days.movies)) {
-    return { venue, todayIso, maoyanPayload: cached.days };
+  const venueCacheFile = path.join(SERP_VENUE_CACHE_DIR, `${venue.id}_${todayIso}.json`);
+  // Only reuse today's exact-date Maoyan cache within a 4-hour window (never serve yesterday's file on a new day)
+  try {
+    const stat = await fs.stat(venueCacheFile);
+    if (Date.now() - stat.mtimeMs < 4 * 3_600_000) {
+      const parsed = JSON.parse(await fs.readFile(venueCacheFile, 'utf-8'));
+      if (parsed && Array.isArray(parsed.movies) && parsed.movies.length > 0) {
+        return { venue, todayIso, maoyanPayload: parsed };
+      }
+    }
+  } catch {
+    // Today's Maoyan cache does not exist yet -> fetch fresh live Maoyan data below
   }
 
-  const venueCacheFile = path.join(SERP_VENUE_CACHE_DIR, `${venue.id}_${todayIso}.json`);
   const url = `https://m.maoyan.com/ajax/cinemaDetail?cinemaId=${encodeURIComponent(venue.maoyanId)}`;
 
   try {
@@ -2510,11 +2577,9 @@ export async function syncLiveCatalog() {
         cid === 'syd-golden-age' ||
         cid === 'mel-astor' ||
         cid === 'mel-imax' ||
-        cid === 'sha-grand' ||
-        cid === 'sha-sho' ||
-        cid === 'sha-tianshan'
-          ? 14
-          : 6;
+        cid.startsWith('sha-')
+          ? 30
+          : 10;
       const venueTop = Array.from(vc.keys())
         .sort((a, b) => (vc.get(b) || 0) - (vc.get(a) || 0))
         .slice(0, perVenueKeep);
@@ -2525,7 +2590,7 @@ export async function syncLiveCatalog() {
       (a, b) => (counts.get(b) || 0) - (counts.get(a) || 0)
     );
     for (const k of overallSorted) {
-      if (selectedKeysSet.size >= 115) break;
+      if (selectedKeysSet.size >= 180) break;
       selectedKeysSet.add(k);
     }
 
