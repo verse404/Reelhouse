@@ -80,7 +80,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           if git fetch origin catalog-data --depth=1 2>/dev/null; then
-            git checkout -B catalog-data FETCH_HEAD
+            git checkout -f -B catalog-data FETCH_HEAD
           else
             git checkout --orphan catalog-data
             git rm -rf --cached . >/dev/null 2>&1 || true
