@@ -12,9 +12,9 @@ const DOUBAN_CACHE_TTL_MS = 24 * 3_600_000; // Refresh live Douban scores every 
 const DOUBAN_UNRATED_TTL_MS = 12 * 3_600_000; // Retry confirmed-unrated films every 12h
 const MDBLIST_SETTLED_CACHE_TTL_MS = 7 * 24 * 3_600_000; // Settled RT/IMDb scores (50+ critic reviews)
 const MDBLIST_CACHE_TTL_MS = 24 * 3_600_000; // Refresh MDBList RT/IMDb scores every 24h
-const MDBLIST_EMPTY_TTL_MS = 6 * 3_600_000; // Retry empty MDBList entries every 6h
+const MDBLIST_EMPTY_TTL_MS = 2 * 3_600_000; // Retry empty MDBList entries every 2h (catches fresh embargo drops)
 const OMDB_CACHE_TTL_MS = 24 * 3_600_000; // Cache OMDb lookups to stay well under 1k/day cap
-const OMDB_EMPTY_TTL_MS = 6 * 3_600_000;
+const OMDB_EMPTY_TTL_MS = 2 * 3_600_000;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -330,12 +330,19 @@ async function fetchLiveDoubanForMovie(movie, knownSubjectId = null) {
   let votes = 0;
   let fetchedOk = false;
 
+  let sawSuggestOk = false;
+  let sawSuggestHttpError = false;
+
   if (!subjectId) {
     // Use `movie.douban.com/j/subject_suggest` (reliable 200 OK; `rexxar/search/subjects` returns 403 WAF)
     const isRealChineseHint = /[\u4e00-\u9fff]/.test(zhHint);
+    const titleHasCjk = /[\u4e00-\u9fff]/.test(cleanTitle);
     const searchCandidates = [];
     if (isRealChineseHint) searchCandidates.push(zhHint);
-    if (!String(movie.id || '').startsWith('live-film-') && cleanTitle.length >= 2) {
+    if (
+      cleanTitle.length >= 2 &&
+      (titleHasCjk || !String(movie.id || '').startsWith('live-film-'))
+    ) {
       searchCandidates.push(cleanTitle);
     }
 
@@ -346,9 +353,16 @@ async function fetchLiveDoubanForMovie(movie, knownSubjectId = null) {
           headers: desktopHeaders,
           signal: AbortSignal.timeout(7000),
         });
-        if (!res.ok) continue;
+        if (!res.ok) {
+          sawSuggestHttpError = true;
+          continue;
+        }
+        sawSuggestOk = true;
         const items = await res.json();
         if (!Array.isArray(items) || items.length === 0) continue;
+
+        const isCjkQuery = /[\u4e00-\u9fff]/.test(q);
+        const normCjkQ = q.replace(/[\s:：·\-—《》()（）]+/g, '');
 
         const hit = items.find((item) => {
           if (!item || item.type !== 'movie' || !item.id || !/^\d+$/.test(String(item.id))) {
@@ -358,8 +372,12 @@ async function fetchLiveDoubanForMovie(movie, knownSubjectId = null) {
           if (!Number.isFinite(itemYear) || Math.abs(itemYear - targetYear) > 1) return false;
           const tTitle = String(item.title || '').trim();
           const tSub = String(item.sub_title || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
-          if (isRealChineseHint && q === zhHint) {
-            return tTitle === zhHint || tTitle.includes(zhHint) || zhHint.includes(tTitle);
+          if (isCjkQuery) {
+            const normCjkT = tTitle.replace(/[\s:：·\-—《》()（）]+/g, '');
+            return (
+              normCjkQ.length >= 2 &&
+              (normCjkT === normCjkQ || normCjkT.includes(normCjkQ) || normCjkQ.includes(normCjkT))
+            );
           }
           return (
             normClean.length >= 3 &&
@@ -373,12 +391,26 @@ async function fetchLiveDoubanForMovie(movie, knownSubjectId = null) {
           break;
         }
       } catch {
-        // Try next candidate
+        sawSuggestHttpError = true;
       }
     }
   }
 
   if (!subjectId) {
+    // Distinguish a clean HTTP 200 "not listed on Douban" from a 403/429/network failure
+    // so unlisted festival/AU films never trip the rate-limit circuit breaker!
+    if (sawSuggestOk && !sawSuggestHttpError) {
+      return {
+        notFound: true,
+        subjectId: null,
+        chineseTitle,
+        score: null,
+        votes: 0,
+        starBreakdownPercent: null,
+        url: null,
+        fetchedOk: true,
+      };
+    }
     return null;
   }
 
@@ -489,7 +521,7 @@ function computeRtBadge(tomatometer) {
  */
 export async function enrichMoviesWithTrueRatings(
   movies,
-  { omdbApiKey = '', mdblistApiKey = '', cacheDir, forceRefresh = false }
+  { omdbApiKey = '', mdblistApiKey = '', cacheDir, forceRefresh = false, forceEmptyRefresh = false }
 ) {
   if (!Array.isArray(movies) || movies.length === 0) return movies;
 
@@ -540,11 +572,9 @@ export async function enrichMoviesWithTrueRatings(
             if (!omdbApiKey) return null;
             const cached = omdbCache[cacheKey];
             const cachedData = cached?.data || null;
-            const ttl =
-              cachedData && Object.keys(cachedData).length > 0
-                ? OMDB_CACHE_TTL_MS
-                : OMDB_EMPTY_TTL_MS;
-            if (!forceRefresh && cached && now - cached.ts < ttl) {
+            const cachedHasOmdb = Boolean(cachedData && Object.keys(cachedData).length > 0);
+            const ttl = cachedHasOmdb ? OMDB_CACHE_TTL_MS : OMDB_EMPTY_TTL_MS;
+            if (!forceRefresh && !(forceEmptyRefresh && !cachedHasOmdb) && cached && now - cached.ts < ttl) {
               return cachedData;
             }
             const fresh = await fetchOmdbForMovie(movie, omdbApiKey).catch(() => null);
@@ -575,7 +605,7 @@ export async function enrichMoviesWithTrueRatings(
               : hasAnyScore
                 ? MDBLIST_CACHE_TTL_MS
                 : MDBLIST_EMPTY_TTL_MS;
-            if (!forceRefresh && cached && now - cached.ts < ttl) {
+            if (!forceRefresh && !(forceEmptyRefresh && !hasAnyScore) && cached && now - cached.ts < ttl) {
               return cachedData;
             }
             const fresh = await fetchMdblistForMovie(movie, mdblistApiKey).catch(() => null);
@@ -627,19 +657,26 @@ export async function enrichMoviesWithTrueRatings(
 
     if (
       !forceRefresh &&
+      !(forceEmptyRefresh && !cachedHasScore) &&
       cachedData &&
       doubanTtl > 0 &&
       now - cachedDouban.ts < doubanTtl
     ) {
-      doubanRes = cachedData;
+      doubanRes = cachedData.notFound ? null : cachedData;
     } else if (isSuspiciousEventMovie(movie)) {
       doubanRes = null;
     } else if (consecutiveDoubanFailures >= 5 && !knownDoubanId) {
       // Avoid hammering Douban search after sustained 403/429 responses
-      doubanRes = cachedData;
+      doubanRes = cachedData && !cachedData.notFound ? cachedData : null;
     } else {
       const freshDouban = await fetchLiveDoubanForMovie(movie, knownDoubanId).catch(() => null);
-      if (freshDouban && freshDouban.score !== null) {
+      if (freshDouban && freshDouban.notFound) {
+        if (!cachedHasScore) {
+          doubanCache[cacheKey] = { ts: now, data: freshDouban };
+        }
+        doubanRes = cachedHasScore ? cachedData : null;
+        consecutiveDoubanFailures = 0;
+      } else if (freshDouban && freshDouban.score !== null) {
         if (!freshDouban.starBreakdownPercent && cachedData?.starBreakdownPercent) {
           freshDouban.starBreakdownPercent = cachedData.starBreakdownPercent;
         }
@@ -649,6 +686,7 @@ export async function enrichMoviesWithTrueRatings(
       } else if (freshDouban && cachedHasScore) {
         // Never overwrite a valid previously verified Douban score with null
         doubanRes = cachedData;
+        consecutiveDoubanFailures = 0;
       } else if (freshDouban) {
         doubanCache[cacheKey] = { ts: now, data: freshDouban };
         doubanRes = freshDouban;

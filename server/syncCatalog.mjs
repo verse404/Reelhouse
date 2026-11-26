@@ -288,7 +288,7 @@ export const TARGET_VENUES = [
     supportedFormats: ['Dolby Atmos', 'Standard', 'Gold Class / LUX'],
     barAndFoodNote: 'Full leather recliners in all 15 auditoriums & curated Pentridge wine bar',
     dealHighlight: 'Royal Discount Every Mon & Tue: A$12 GA / A$10 Movie Club (recliners included)',
-    bookingDomainUrl: 'https://www.palacecinemas.com.au/cinemas/palace-pentridge/',
+    bookingDomainUrl: 'https://www.palacecinemas.com.au/cinemas/pentridge-cinema',
     screenCount: 15,
   },
   {
@@ -632,7 +632,7 @@ export const TARGET_VENUES = [
     supportedFormats: ['Gold Class / LUX', 'Standard'],
     barAndFoodNote: 'Palace Platinum dine-in lounge, champagne bar & Spice Alley downstairs',
     dealHighlight: 'Royal Discount Every Mon & Tue: A$12 GA / A$10 Palace Movie Club',
-    bookingDomainUrl: 'https://www.palacecinemas.com.au/cinemas/palace-central/',
+    bookingDomainUrl: 'https://www.palacecinemas.com.au/cinemas/palace-central-sydney',
     screenCount: 13,
   },
   {
@@ -1989,7 +1989,13 @@ async function fetchMovingStoryVenueDaysHtml(baseUrl, todayIso) {
                 : /\brooftop\b/i.test(attrMatches)
                   ? 'Rooftop Cinema'
                   : 'Standard';
-            const cleanedTitle = rawTitle.replace(/\s*\((?:35mm|70mm)\)/i, '').trim();
+            const cleanedTitle = rawTitle
+        .replace(/^(?:BFF|JFF|IFF|SFF|MIFF|LFF|GFF|FFF|JIFF|AIFF)\s*\d{2}\s*[-:–]?\s*/i, '')
+        .replace(/\s*\((?:35mm|70mm)\)/i, '')
+        .replace(/\s*[-–—]\s*Re-?issue\b.*$/i, '')
+        .replace(/\s*[-–—]\s*\d+(?:st|nd|rd|th)\s+Anniversary\b.*$/i, '')
+        .trim();
+      if (!cleanedTitle) continue;
             if (!moviesMap.has(cleanedTitle)) moviesMap.set(cleanedTitle, new Map());
             const fmtMap = moviesMap.get(cleanedTitle);
             fmtMap.set(showingType, [...(fmtMap.get(showingType) || []), timeVal]);
@@ -2130,10 +2136,257 @@ function getTimeZoneForCity(city) {
   return 'Australia/Melbourne';
 }
 
-// SerpApi Free Plan protection: 33 AU SerpApi venues refreshed every 84h (~3.5 days)
-// uses ~235 searches/month (safely under 250/mo free cap), while refreshing early if < 3 days remain!
-// Direct scrapers (Shanghai Maoyan 15 venues, IMAX Melbourne, Golden Age Sydney) refresh daily (24h) at 0 cost.
-const SERP_AU_CACHE_TTL_HOURS = Number.parseFloat(process.env.SERP_AU_TTL_HOURS || '84') || 84;
+export const HOYTS_VENUE_CODES = {
+  'mel-hoyts-mc': 'MCECIN',
+  'mel-hoyts-chadstone': 'CHDSTN',
+  'mel-hoyts-docklands': 'DOCCIN',
+  'syd-hoyts-broadway': 'BROADW',
+  'syd-hoyts-chatswood': 'CWFFLD',
+  'syd-hoyts-eq': 'SHOWGR',
+};
+
+export const PALACE_VENUE_SLUGS = {
+  'mel-kino': 'the-kino-melbourne',
+  'mel-como': 'palace-cinema-como',
+  'mel-westgarth': 'palace-westgarth',
+  'mel-palace-pentridge': 'pentridge-cinema',
+  'mel-palace-balwyn': 'palace-balwyn',
+  'syd-palace-norton': 'palace-norton-street',
+  'syd-palace-central': 'palace-central-sydney',
+};
+
+let hoytsMovieMapPromise = null;
+
+/**
+ * Fetches Hoyts AU master movie catalog once per sync run and indexes every
+ * comma-separated `vistaId` (e.g. "HO00008578,HO00011222") to its clean movie title.
+ */
+async function getHoytsMovieMap() {
+  if (!hoytsMovieMapPromise) {
+    hoytsMovieMapPromise = (async () => {
+      const map = new Map();
+      const res = await fetch('https://apim.hoyts.com.au/au/cinemaapi/api/movies', {
+        headers: {
+          'User-Agent':
+            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+          Accept: 'application/json',
+          'Accept-Language': 'en-AU,en;q=0.9',
+        },
+        signal: AbortSignal.timeout(15000),
+      });
+      if (!res.ok) return map;
+      const movies = await res.json();
+      if (!Array.isArray(movies)) return map;
+      for (const mv of movies) {
+        const cleanName = decodeHtmlEntities(String(mv?.name || '')).trim();
+        if (!cleanName) continue;
+        const vistaIds = String(mv?.vistaId || '')
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean);
+        for (const vid of vistaIds) {
+          if (!map.has(vid)) map.set(vid, cleanName);
+        }
+      }
+      return map;
+    })().catch(() => new Map());
+  }
+  return hoytsMovieMapPromise;
+}
+
+/**
+ * Directly fetches up to 14 days of live showtimes from Hoyts AU's official JSON API
+ * (`apim.hoyts.com.au/au/cinemaapi/api/sessions/<CODE>`) at zero SerpApi cost.
+ * Returns `[]` on any error so caller seamlessly falls back to cache / SerpApi.
+ */
+export async function fetchHoytsVenueDaysJson(cinemaCode, todayIso) {
+  try {
+    const [movieMap, res] = await Promise.all([
+      getHoytsMovieMap(),
+      fetch(`https://apim.hoyts.com.au/au/cinemaapi/api/sessions/${encodeURIComponent(cinemaCode)}`, {
+        headers: {
+          'User-Agent':
+            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+          Accept: 'application/json',
+          'Accept-Language': 'en-AU,en;q=0.9',
+        },
+        signal: AbortSignal.timeout(14000),
+      }),
+    ]);
+    if (!res.ok || movieMap.size === 0) return [];
+    const sessions = await res.json();
+    if (!Array.isArray(sessions) || sessions.length === 0) return [];
+
+    const maxDateIso = addDaysIso(todayIso, 13);
+    const byDate = new Map();
+
+    for (const s of sessions) {
+      const mDate = String(s?.date || '').match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})/);
+      if (!mDate) continue;
+      const isoDate = mDate[1];
+      const time24 = mDate[2];
+      if (isoDate < todayIso || isoDate > maxDateIso) continue;
+
+      const rawTitle = movieMap.get(String(s?.movieId || '').trim());
+      if (!rawTitle || /gift card|venue hire|trivia/i.test(rawTitle)) continue;
+      const cleanedTitle = rawTitle
+        .replace(/\s*[-–—]\s*Re-?issue\b.*$/i, '')
+        .replace(/\s*[-–—]\s*\d+(?:st|nd|rd|th)\s+Anniversary\b.*$/i, '')
+        .trim();
+      if (!cleanedTitle) continue;
+
+      const typeId = String(s?.typeId || '').toUpperCase();
+      const origTags = Array.isArray(s?.originalTags)
+        ? s.originalTags.map((t) => String(t).toUpperCase())
+        : [];
+      const screenUpper = String(s?.screenName || '').toUpperCase();
+
+      let showingType = 'Standard';
+      if (typeId === 'IMAX' || origTags.includes('IMAX') || screenUpper.includes('IMAX')) {
+        showingType = 'IMAX';
+      } else if (typeId === 'LUX' || origTags.includes('LUX') || screenUpper.includes('LUX')) {
+        showingType = 'Gold Class / LUX';
+      } else if (origTags.includes('ATMOS') || screenUpper.includes('ATMOS')) {
+        showingType = 'Dolby Atmos';
+      } else if (
+        typeId === 'XTREME' ||
+        typeId === 'SCREENX' ||
+        typeId === 'DBOX' ||
+        origTags.includes('XTREME') ||
+        origTags.includes('SCREENX')
+      ) {
+        showingType = 'Vmax / Xtremescreen';
+      }
+      if (origTags.includes('OC')) {
+        showingType = `${showingType} Open Captions`;
+      }
+
+      if (!byDate.has(isoDate)) byDate.set(isoDate, new Map());
+      const mvMap = byDate.get(isoDate);
+      if (!mvMap.has(cleanedTitle)) mvMap.set(cleanedTitle, new Map());
+      const fmtMap = mvMap.get(cleanedTitle);
+      if (!fmtMap.has(showingType)) fmtMap.set(showingType, new Set());
+      fmtMap.get(showingType).add(time24);
+    }
+
+    return Array.from(byDate.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([isoDate, mvMap]) => ({
+        isoDate,
+        day: '',
+        date: isoDate,
+        movies: Array.from(mvMap.entries()).map(([name, fmtMap]) => ({
+          name,
+          showing: Array.from(fmtMap.entries()).map(([type, timeSet]) => ({
+            type,
+            time: Array.from(timeSet).sort(),
+          })),
+        })),
+      }));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Directly parses up to 14 days of live showtimes from Palace Cinemas' SSR `__NEXT_DATA__`
+ * JSON payload (`/cinemas/<slug>`) at zero SerpApi cost.
+ * Note: Palace embeds Melbourne/Sydney local wall-clock time in `session.date` with a `.000Z`
+ * suffix, so we slice `YYYY-MM-DD` and `HH:MM` directly without shifting timezone.
+ * Returns `[]` on any error so caller seamlessly falls back to cache / SerpApi.
+ */
+export async function fetchPalaceVenueDaysJson(slug, todayIso) {
+  try {
+    const res = await fetch(`https://www.palacecinemas.com.au/cinemas/${encodeURIComponent(slug)}`, {
+      headers: {
+        'User-Agent':
+          'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+        Accept: 'text/html,application/xhtml+xml',
+        'Accept-Language': 'en-AU,en;q=0.9',
+      },
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!res.ok) return [];
+    const html = await res.text();
+    const match = html.match(/<script\s+id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/i);
+    if (!match) return [];
+    const nextData = JSON.parse(match[1]);
+    const movieEntries = nextData?.props?.pageProps?.sessions;
+    if (!Array.isArray(movieEntries) || movieEntries.length === 0) return [];
+
+    const maxDateIso = addDaysIso(todayIso, 13);
+    const byDate = new Map();
+
+    for (const mv of movieEntries) {
+      const rawTitle = decodeHtmlEntities(String(mv?.title || '')).trim();
+      if (!rawTitle || /gift card|venue hire|trivia/i.test(rawTitle)) continue;
+      const cleanedTitle = rawTitle
+        .replace(/^(?:BFF|JFF|IFF|SFF|MIFF|LFF|GFF|FFF|JIFF|AIFF)\s*\d{2}\s*[-:–]?\s*/i, '')
+        .replace(/\s*\((?:35mm|70mm)\)/i, '')
+        .replace(/\s*[-–—]\s*Re-?issue\b.*$/i, '')
+        .replace(/\s*[-–—]\s*\d+(?:st|nd|rd|th)\s+Anniversary\b.*$/i, '')
+        .trim();
+      if (!cleanedTitle) continue;
+      const sessions = Array.isArray(mv?.sessions) ? mv.sessions : [];
+
+      for (const s of sessions) {
+        const mDate = String(s?.date || '').match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})/);
+        if (!mDate) continue;
+        const isoDate = mDate[1];
+        const time24 = mDate[2];
+        if (isoDate < todayIso || isoDate > maxDateIso) continue;
+
+        const infoText = [
+          rawTitle,
+          s?.displayAttributeText || '',
+          ...(Array.isArray(s?.sessionInfo) ? s.sessionInfo : []),
+        ].join(' ');
+
+        let showingType = 'Standard';
+        if (s?.isPlatinum || /\bplatinum\b/i.test(infoText)) {
+          showingType = 'Palace Platinum';
+        } else if (/\b(35mm|70mm)\b/i.test(infoText)) {
+          showingType = /\b70mm\b/i.test(infoText) ? '70mm Print' : '35mm Print';
+        } else if (/\b(atmos|dolby)\b/i.test(infoText)) {
+          showingType = 'Dolby Atmos';
+        }
+        if (/\bopen\s*captions?\b/i.test(infoText)) {
+          showingType = `${showingType} Open Captions`;
+        }
+
+        if (!byDate.has(isoDate)) byDate.set(isoDate, new Map());
+        const mvMap = byDate.get(isoDate);
+        if (!mvMap.has(cleanedTitle)) mvMap.set(cleanedTitle, new Map());
+        const fmtMap = mvMap.get(cleanedTitle);
+        if (!fmtMap.has(showingType)) fmtMap.set(showingType, new Set());
+        fmtMap.get(showingType).add(time24);
+      }
+    }
+
+    return Array.from(byDate.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([isoDate, mvMap]) => ({
+        isoDate,
+        day: '',
+        date: isoDate,
+        movies: Array.from(mvMap.entries()).map(([name, fmtMap]) => ({
+          name,
+          showing: Array.from(fmtMap.entries()).map(([type, timeSet]) => ({
+            type,
+            time: Array.from(timeSet).sort(),
+          })),
+        })),
+      }));
+  } catch {
+    return [];
+  }
+}
+
+// SerpApi Free Plan protection: with Hoyts (6) + Palace (7) + 7 AU directs + 15 Shanghai on free
+// direct endpoints (35/50 cinemas daily!), only 15 AU venues rely on SerpApi.
+// Refreshing 15 venues every 46h (~every 2 days on a daily cron) uses ~225–240 searches/month
+// (safely under the 250/mo free cap), while still refreshing early if < 3 days remain!
+const SERP_AU_CACHE_TTL_HOURS = Number.parseFloat(process.env.SERP_AU_TTL_HOURS || '46') || 46;
 
 function countFutureDaysInBlocks(days, anchorIso, realTodayIso) {
   if (!Array.isArray(days)) return 0;
@@ -2159,18 +2412,24 @@ async function fetchCinemaShowtimesViaSerpApi(venue, serpKey, prevVenueDays = nu
 
   const venueCacheFile = path.join(SERP_VENUE_CACHE_DIR, `${venue.id}_${todayIso}.json`);
 
-  // Direct multi-day HTML scrapers (0 SerpApi cost) always refresh daily (20h TTL)
+  // Direct multi-day JSON / HTML fetchers (0 SerpApi cost) always refresh daily (20h TTL),
+  // and AUTOMATICALLY fall through to cache + SerpApi if any direct endpoint fails or returns empty!
   const isMovingStoryVenue = Boolean(MOVING_STORY_BASE_URLS[venue.id]);
+  const hoytsCode = HOYTS_VENUE_CODES[venue.id] || null;
+  const palaceSlug = PALACE_VENUE_SLUGS[venue.id] || null;
   if (
     venue.id === 'mel-imax' ||
     venue.id === 'mel-astor' ||
     venue.id === 'syd-golden-age' ||
-    isMovingStoryVenue
+    isMovingStoryVenue ||
+    hoytsCode ||
+    palaceSlug
   ) {
     const directRecent = await findRecentVenueCache(venue.id, todayIso, 20);
-    const minCachedDays = venue.id === 'mel-astor' ? 4 : 8;
+    const minCachedDays = venue.id === 'mel-astor' || hoytsCode || palaceSlug ? 4 : 8;
     if (
       directRecent &&
+      directRecent.anchorIso === todayIso &&
       countFutureDaysInBlocks(directRecent.days, directRecent.anchorIso, todayIso) >= minCachedDays
     ) {
       return {
@@ -2179,6 +2438,7 @@ async function fetchCinemaShowtimesViaSerpApi(venue, serpKey, prevVenueDays = nu
         realTodayIso: todayIso,
         days: sanitizeVenueDaysHtmlEntities(directRecent.days),
         usedSerpCredit: false,
+        source: hoytsCode ? 'hoyts-cache' : palaceSlug ? 'palace-cache' : 'direct-cache',
       };
     }
 
@@ -2189,16 +2449,30 @@ async function fetchCinemaShowtimesViaSerpApi(venue, serpKey, prevVenueDays = nu
           ? await fetchAstorMelbourneDaysHtml(todayIso)
           : venue.id === 'syd-golden-age'
             ? await fetchGoldenAgeSydneyDaysHtml(todayIso)
-            : await fetchMovingStoryVenueDaysHtml(MOVING_STORY_BASE_URLS[venue.id], todayIso);
+            : isMovingStoryVenue
+              ? await fetchMovingStoryVenueDaysHtml(MOVING_STORY_BASE_URLS[venue.id], todayIso)
+              : hoytsCode
+                ? await fetchHoytsVenueDaysJson(hoytsCode, todayIso)
+                : await fetchPalaceVenueDaysJson(palaceSlug, todayIso);
     if (directDays.length > 0) {
       const cleanDirectDays = sanitizeVenueDaysHtmlEntities(directDays);
       await fs.mkdir(SERP_VENUE_CACHE_DIR, { recursive: true });
       await fs.writeFile(venueCacheFile, JSON.stringify(cleanDirectDays), 'utf-8');
-      return { venue, todayIso, realTodayIso: todayIso, days: cleanDirectDays, usedSerpCredit: false };
+      return {
+        venue,
+        todayIso,
+        realTodayIso: todayIso,
+        days: cleanDirectDays,
+        usedSerpCredit: false,
+        source: hoytsCode ? 'hoyts-live' : palaceSlug ? 'palace-live' : 'direct-live',
+      };
     }
+    console.warn(
+      `[Reelhouse Direct] ${venue.id} (${venue.name}) returned 0 days — automatically falling back to cache / SerpApi.`
+    );
   }
 
-  // SerpApi-backed AU venues: reuse cache within 84h window as long as >= 3 upcoming days remain
+  // SerpApi-backed AU venues (and fallback for failed direct fetchers): reuse cache within 46h window as long as >= 3 upcoming days remain
   const recentCache = await findRecentVenueCache(venue.id, todayIso, SERP_AU_CACHE_TTL_HOURS);
   if (
     recentCache &&
@@ -2210,10 +2484,11 @@ async function fetchCinemaShowtimesViaSerpApi(venue, serpKey, prevVenueDays = nu
       realTodayIso: todayIso,
       days: sanitizeVenueDaysHtmlEntities(recentCache.days),
       usedSerpCredit: false,
+      source: hoytsCode || palaceSlug ? 'direct-fallback-cache' : 'serp-cache',
     };
   }
 
-  // Stateless container carry-forward: if live_catalog.json already holds fresh (< 84h) upcoming
+  // Stateless container carry-forward: if live_catalog.json already holds fresh (< 46h) upcoming
   // schedules (>= 3 future days) for this venue, preserve them without burning SerpApi quota.
   if (prevVenueDays && prevVenueDays.fresh && prevVenueDays.futureDateCount >= 3) {
     return {
@@ -2222,6 +2497,7 @@ async function fetchCinemaShowtimesViaSerpApi(venue, serpKey, prevVenueDays = nu
       realTodayIso: todayIso,
       days: sanitizeVenueDaysHtmlEntities(prevVenueDays.days),
       usedSerpCredit: false,
+      source: hoytsCode || palaceSlug ? 'direct-fallback-carry' : 'serp-carry',
     };
   }
 
@@ -2240,7 +2516,14 @@ async function fetchCinemaShowtimesViaSerpApi(venue, serpKey, prevVenueDays = nu
       if (days.length > 0) {
         await fs.mkdir(SERP_VENUE_CACHE_DIR, { recursive: true });
         await fs.writeFile(venueCacheFile, JSON.stringify(days), 'utf-8');
-        return { venue, todayIso, realTodayIso: todayIso, days, usedSerpCredit: true };
+        return {
+          venue,
+          todayIso,
+          realTodayIso: todayIso,
+          days,
+          usedSerpCredit: true,
+          source: hoytsCode || palaceSlug ? 'direct-fallback-serp' : 'serp-live',
+        };
       }
     } catch {
       // Fall through to multi-day cache grace fallback below
@@ -2272,6 +2555,7 @@ async function fetchCinemaShowtimesViaSerpApi(venue, serpKey, prevVenueDays = nu
 }
 
 export async function syncLiveCatalog() {
+  hoytsMovieMapPromise = null;
   const cfg = await getApiConfig();
   if (!cfg.tmdbApiKey) {
     return {
@@ -2492,6 +2776,17 @@ export async function syncLiveCatalog() {
       );
       venueResults.push(...batchOut);
     }
+
+    const srcCounts = {};
+    let serpCreditsUsed = 0;
+    for (const r of venueResults) {
+      const k = r.source || (r.usedSerpCredit ? 'serp-live' : 'serp-cache-or-carry');
+      srcCounts[k] = (srcCounts[k] || 0) + 1;
+      if (r.usedSerpCredit) serpCreditsUsed += 1;
+    }
+    console.log(
+      `[Reelhouse AU Sync] sources=${JSON.stringify(srcCounts)}, serpCreditsUsed=${serpCreditsUsed}`
+    );
 
     for (const { venue, todayIso, realTodayIso, days, usedSerpCredit } of venueResults) {
       if (usedSerpCredit) anyUsedSerpCredit = true;
@@ -2993,6 +3288,7 @@ export async function syncLiveCatalog() {
     omdbApiKey: cfg.omdbApiKey,
     mdblistApiKey: cfg.mdblistApiKey,
     cacheDir: CACHE_DIR,
+    forceEmptyRefresh: process.env.FORCE_EMPTY_RATINGS_REFRESH === '1',
   });
 
   const nowIso = new Date().toISOString();

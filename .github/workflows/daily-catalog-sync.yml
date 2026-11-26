@@ -51,6 +51,7 @@ jobs:
           OMDB_API_KEY: ${{ secrets.OMDB_API_KEY }}
           MDBLIST_API_KEY: ${{ secrets.MDBLIST_API_KEY }}
           SERPAPI_API_KEY: ${{ secrets.SERPAPI_API_KEY }}
+          FORCE_EMPTY_RATINGS_REFRESH: ${{ github.event_name == 'workflow_dispatch' && '1' || '0' }}
         run: npm run sync
 
       - name: Dispatch Watchlist & 35mm/70mm drop radar alerts (optional secrets)
