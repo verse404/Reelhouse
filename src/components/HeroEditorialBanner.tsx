@@ -1,6 +1,8 @@
 import { useState } from 'react';
-import { ArrowUpRight, ChevronLeft, ChevronRight, LocateFixed } from 'lucide-react';
+import { ArrowUpRight, ChevronLeft, ChevronRight, LocateFixed, LogIn, UserCheck } from 'lucide-react';
 import type { AppLanguage, CityId, CityMeta, Movie } from '../types/cinema';
+import type { ReelhouseAuthUser } from '../services/firebaseAuth';
+import type { CloudSyncState } from './AccountModal';
 import { getDisplayMovieTitle, getUiText } from '../utils/i18n';
 import type { UserLocationOrigin } from '../utils/proximity';
 
@@ -109,8 +111,11 @@ interface HeroEditorialBannerProps {
   userOrigin: UserLocationOrigin;
   featuredMovies: Movie[];
   activeSearchQuery: string;
+  authUser: ReelhouseAuthUser | null;
+  cloudSyncState: CloudSyncState;
   onFocusMovieTitle: (title: string) => void;
   onOpenLocationModal: () => void;
+  onOpenAccountModal: () => void;
 }
 
 const ROMAN_PLATES = ['I', 'II', 'III', 'IV'];
@@ -121,8 +126,11 @@ export function HeroEditorialBanner({
   userOrigin,
   featuredMovies,
   activeSearchQuery,
+  authUser,
+  cloudSyncState,
   onFocusMovieTitle,
   onOpenLocationModal,
+  onOpenAccountModal,
 }: HeroEditorialBannerProps) {
   const t = getUiText(lang);
   const displayCityName = t.cityNames[cityMeta.id] ?? cityMeta.name;
@@ -173,6 +181,39 @@ export function HeroEditorialBanner({
           </p>
 
           <div className="masthead-location-cta-row">
+            <button
+              type="button"
+              id="hero-account-cta-btn"
+              className={`masthead-account-btn ${
+                authUser ? 'masthead-account-btn--signed-in' : ''
+              }`}
+              onClick={onOpenAccountModal}
+            >
+              {authUser ? (
+                <>
+                  <UserCheck size={14} aria-hidden="true" />
+                  <span>
+                    {lang === 'zh'
+                      ? `${authUser.displayName} · ${
+                          cloudSyncState === 'syncing' ? '正在云端同步…' : '偏好已云端同步'
+                        }`
+                      : `${authUser.displayName} · ${
+                          cloudSyncState === 'syncing' ? 'Syncing…' : 'Preferences Synced'
+                        }`}
+                  </span>
+                </>
+              ) : (
+                <>
+                  <LogIn size={14} aria-hidden="true" />
+                  <span>
+                    {lang === 'zh'
+                      ? '登录 / 注册以保存收藏影院'
+                      : 'Sign In to Save Favorite Cinemas'}
+                  </span>
+                </>
+              )}
+            </button>
+
             <button
               type="button"
               id="hero-my-location-btn"

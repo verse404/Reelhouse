@@ -1793,8 +1793,11 @@ export function App() {
           userOrigin={userOrigin}
           featuredMovies={featuredMovies}
           activeSearchQuery={filters.searchQuery}
+          authUser={authUser}
+          cloudSyncState={cloudSyncState}
           onFocusMovieTitle={handleFocusFeaturedMovie}
           onOpenLocationModal={handleOpenLocationModal}
+          onOpenAccountModal={() => setIsAccountModalOpen(true)}
         />
 
         <SmartFilterDeck
