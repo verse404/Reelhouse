@@ -1,5 +1,7 @@
-import { KeyRound, Languages, LocateFixed, Sun, Moon } from 'lucide-react';
+import { KeyRound, Languages, LocateFixed, Sun, Moon, User, UserCheck } from 'lucide-react';
 import type { AppLanguage, BrowseMode, CityId, ReleaseStatus } from '../types/cinema';
+import type { ReelhouseAuthUser } from '../services/firebaseAuth';
+import type { CloudSyncState } from './AccountModal';
 import { getUiText } from '../utils/i18n';
 import type { UserLocationOrigin } from '../utils/proximity';
 
@@ -17,6 +19,8 @@ interface HeaderBarProps {
   shortlistCount: number;
   matchingSessionCount: number;
   comingSoonCount: number;
+  authUser: ReelhouseAuthUser | null;
+  cloudSyncState: CloudSyncState;
   onChangeCity: (city: CityId) => void;
   onToggleLanguage: () => void;
   onChangeReleaseStatus: (status: ReleaseStatus) => void;
@@ -24,6 +28,7 @@ interface HeaderBarProps {
   onOpenLocationModal: () => void;
   onToggleEdition: () => void;
   onOpenApiSettings: () => void;
+  onOpenAccountModal: () => void;
   onOpenShortlist: () => void;
   onResetHome: () => void;
 }
@@ -40,6 +45,8 @@ export function HeaderBar({
   shortlistCount,
   matchingSessionCount,
   comingSoonCount,
+  authUser,
+  cloudSyncState,
   onChangeCity,
   onToggleLanguage,
   onChangeReleaseStatus,
@@ -47,6 +54,7 @@ export function HeaderBar({
   onOpenLocationModal,
   onToggleEdition,
   onOpenApiSettings,
+  onOpenAccountModal,
   onOpenShortlist,
   onResetHome,
 }: HeaderBarProps) {
@@ -235,6 +243,44 @@ export function HeaderBar({
           >
             {edition === 'noir' ? <Sun size={13} /> : <Moon size={13} />}
             <span>{edition === 'noir' ? 'IVOIRE' : 'NOIR'}</span>
+          </button>
+
+          <button
+            type="button"
+            id="open-account-header-btn"
+            className={`edition-toggle account-header-btn ${
+              authUser ? 'edition-toggle--live account-header-btn--signed-in' : ''
+            }`}
+            onClick={onOpenAccountModal}
+            aria-label={
+              authUser
+                ? lang === 'zh'
+                  ? `会员账号：${authUser.displayName}`
+                  : `Member account: ${authUser.displayName}`
+                : lang === 'zh'
+                  ? '登录或注册 Reelhouse 账号以跨设备同步偏好'
+                  : 'Sign in or create an account to sync favorite cinemas across devices'
+            }
+            title={
+              authUser
+                ? lang === 'zh'
+                  ? '查看会员档案与云端同步设置'
+                  : 'Manage member profile & cloud sync preferences'
+                : lang === 'zh'
+                  ? '登录 / 注册账号保存收藏影院与偏好'
+                  : 'Sign in / Register to save favorite cinemas & preferences'
+            }
+          >
+            {authUser ? <UserCheck size={12} aria-hidden="true" /> : <User size={12} aria-hidden="true" />}
+            <span className="account-header-btn__label">
+              {authUser ? authUser.displayName : lang === 'zh' ? '登录' : 'SIGN IN'}
+            </span>
+            {authUser && (
+              <span
+                className={`account-header-btn__dot account-header-btn__dot--${cloudSyncState}`}
+                aria-hidden="true"
+              />
+            )}
           </button>
 
           <button

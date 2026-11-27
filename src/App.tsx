@@ -1,6 +1,14 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BookmarkCheck, Check, Link2 } from 'lucide-react';
 import { cinemaDataService } from './services/cinemaProvider';
+import {
+  initFirebaseClient,
+  loadCloudUserPreferences,
+  saveCloudUserPreferences,
+  signOutUser,
+  subscribeAuthState,
+  type ReelhouseAuthUser,
+} from './services/firebaseAuth';
 import type {
   AppLanguage,
   BrowseMode,
@@ -21,19 +29,26 @@ import {
   copyTextSafely,
   isAdminUrlFlagPresent,
   loadValidatedCity,
+  loadValidatedCustomPlace,
   loadValidatedEdition,
   loadValidatedFavoriteCinemas,
+  loadValidatedFavoritesOnly,
   loadValidatedLanguage,
+  loadValidatedNearHub,
   loadValidatedShortlist,
   loadValidatedWatchlist,
   parseValidatedFolioEntries,
   parseValidatedUrlFilters,
   saveCityPreference,
+  saveCustomPlacePreference,
   saveEditionPreference,
   saveFavoriteCinemas,
+  saveFavoritesOnlyPreference,
   saveLanguagePreference,
+  saveNearHubPreference,
   saveShortlist,
   saveWatchlist,
+  type CloudUserPreferences,
 } from './utils/security';
 import { getDaysUntilRelease, getLocalCurrentMinutesFromMidnight } from './utils/formatters';
 import { getDisplayMovieTitle, getUiText } from './utils/i18n';
@@ -67,6 +82,7 @@ import { SessionDetailModal } from './components/SessionDetailModal';
 import { MovieRatingsModal } from './components/MovieRatingsModal';
 import { TrailerModal } from './components/TrailerModal';
 import { ApiSettingsModal } from './components/ApiSettingsModal';
+import { AccountModal, type CloudSyncState } from './components/AccountModal';
 import { ClosestCinemasSpotlight } from './components/ClosestCinemasSpotlight';
 import {
   MyLocationModal,
@@ -124,6 +140,17 @@ export function App() {
     );
     const fallbackDate = baseCalendar[0]?.dateIso ?? '2026-11-14';
     const validDates = urlDates.length > 0 ? urlDates : [fallbackDate];
+    const savedFavs = loadValidatedFavoriteCinemas();
+    const savedFavOnly = loadValidatedFavoritesOnly();
+    const savedNearHub = loadValidatedNearHub();
+    const savedPlace = loadValidatedCustomPlace();
+    const resolvedNearHub =
+      urlPatch.nearHubId ??
+      (savedNearHub === 'custom' && savedPlace?.city === resolvedCity
+        ? 'custom'
+        : savedNearHub !== 'custom'
+          ? savedNearHub
+          : 'cbd');
 
     return {
       city: resolvedCity,
@@ -134,7 +161,7 @@ export function App() {
       selectedMovieId: urlPatch.selectedMovieId ?? 'all',
       selectedCinemaId: urlPatch.selectedCinemaId ?? 'all',
       chain: urlPatch.chain ?? 'all',
-      favoritesOnly: urlPatch.favoritesOnly ?? false,
+      favoritesOnly: urlPatch.favoritesOnly ?? (savedFavOnly && savedFavs.length > 0),
       suburb: urlPatch.suburb ?? 'all',
       timeOfDay: urlPatch.timeOfDay ?? 'all',
       formats: urlPatch.formats ?? [],
@@ -143,7 +170,7 @@ export function App() {
       priceCap: urlPatch.priceCap ?? 'all',
       minRating: urlPatch.minRating ?? 'all',
       finishBy: urlPatch.finishBy ?? 'all',
-      nearHubId: urlPatch.nearHubId ?? 'cbd',
+      nearHubId: resolvedNearHub,
       dealsOnly: urlPatch.dealsOnly ?? false,
       makeItOnly: urlPatch.makeItOnly ?? false,
       showPastToday: urlPatch.showPastToday ?? false,
@@ -152,9 +179,21 @@ export function App() {
   });
 
   const [gpsCoords, setGpsCoords] = useState<{ lat: number; lng: number } | null>(null);
-  const [customPlace, setCustomPlace] = useState<GeocodedPlaceResult | null>(null);
+  const [customPlace, setCustomPlace] = useState<GeocodedPlaceResult | null>(() =>
+    loadValidatedCustomPlace()
+  );
   const [gpsStatus, setGpsStatus] = useState<'idle' | 'locating' | 'active' | 'blocked'>('idle');
   const [isLocationModalOpen, setIsLocationModalOpen] = useState(false);
+
+  const [authConfigured, setAuthConfigured] = useState(false);
+  const [authUser, setAuthUser] = useState<ReelhouseAuthUser | null>(null);
+  const [isAccountModalOpen, setIsAccountModalOpen] = useState(false);
+  const [cloudSyncState, setCloudSyncState] = useState<CloudSyncState>('idle');
+  const [favoritesOnlyDefault, setFavoritesOnlyDefault] = useState<boolean>(() =>
+    loadValidatedFavoritesOnly()
+  );
+  const cloudHydratedUidRef = useRef<string | null>(null);
+  const suppressNextCloudSaveRef = useRef(false);
 
   const [shortlist, setShortlist] = useState<ShortlistEntry[]>(() => {
     const sharedEntries = parseValidatedFolioEntries(window.location.search);
@@ -207,6 +246,228 @@ export function App() {
   useEffect(() => {
     document.documentElement.lang = lang === 'zh' ? 'zh-CN' : 'en';
   }, [lang]);
+
+  // Initialize Firebase Auth & subscribe to member session changes
+  useEffect(() => {
+    let active = true;
+    let unsubscribe = () => {};
+    initFirebaseClient().then((ready) => {
+      if (!active) return;
+      setAuthConfigured(ready);
+      if (!ready) return;
+      unsubscribe = subscribeAuthState((user) => {
+        if (!active) return;
+        setAuthUser(user);
+        if (!user) {
+          cloudHydratedUidRef.current = null;
+          setCloudSyncState('idle');
+        }
+      });
+    });
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, []);
+
+  const buildCurrentCloudPreferences = useCallback((): CloudUserPreferences => {
+    const safeNearHub = filters.nearHubId === 'gps' ? 'cbd' : filters.nearHubId;
+    return {
+      favoriteCinemas,
+      favoritesOnly: favoritesOnlyDefault,
+      defaultCity: filters.city,
+      nearHubId: safeNearHub,
+      customPlace: customPlace ?? null,
+      watchlist,
+      shortlist,
+      edition,
+      lang,
+    };
+  }, [
+    favoriteCinemas,
+    favoritesOnlyDefault,
+    filters.city,
+    filters.nearHubId,
+    customPlace,
+    watchlist,
+    shortlist,
+    edition,
+    lang,
+  ]);
+
+  // Hydrate & smart-merge cloud preferences once when a member signs in
+  useEffect(() => {
+    if (!authUser) return;
+    if (cloudHydratedUidRef.current === authUser.uid) return;
+
+    let cancelled = false;
+    setCloudSyncState('syncing');
+
+    const hydrateMemberPreferences = async () => {
+      try {
+        const cloud = await loadCloudUserPreferences(authUser.uid);
+        if (cancelled) return;
+
+        const urlPatch = parseValidatedUrlFilters(window.location.search);
+
+        if (cloud && Object.keys(cloud).length > 0) {
+          suppressNextCloudSaveRef.current = true;
+
+          const mergedFavorites = Array.from(
+            new Set([...(cloud.favoriteCinemas ?? []), ...favoriteCinemas])
+          ).slice(0, 32);
+          setFavoriteCinemas(mergedFavorites);
+          saveFavoriteCinemas(mergedFavorites);
+
+          const mergedWatchlist = Array.from(
+            new Set([...(cloud.watchlist ?? []), ...watchlist])
+          ).slice(0, 24);
+          setWatchlist(mergedWatchlist);
+          saveWatchlist(mergedWatchlist);
+
+          const mergedShortlistMap = new Map<string, ShortlistEntry>();
+          for (const entry of [...(cloud.shortlist ?? []), ...shortlist]) {
+            if (!mergedShortlistMap.has(entry.sessionId)) {
+              mergedShortlistMap.set(entry.sessionId, entry);
+            }
+          }
+          const mergedShortlist = Array.from(mergedShortlistMap.values()).slice(0, 8);
+          setShortlist(mergedShortlist);
+          saveShortlist(mergedShortlist);
+
+          const nextFavOnly =
+            cloud.favoritesOnly !== undefined ? cloud.favoritesOnly : favoritesOnlyDefault;
+          setFavoritesOnlyDefault(nextFavOnly);
+          saveFavoritesOnlyPreference(nextFavOnly);
+
+          const nextPlace =
+            cloud.customPlace !== undefined ? cloud.customPlace : customPlace;
+          setCustomPlace(nextPlace ?? null);
+          saveCustomPlacePreference(nextPlace ?? null);
+
+          const nextCity = !urlPatch.city && cloud.defaultCity ? cloud.defaultCity : filters.city;
+          saveCityPreference(nextCity);
+
+          const nextHub =
+            cloud.nearHubId &&
+            (cloud.nearHubId !== 'custom' || (nextPlace && nextPlace.city === nextCity))
+              ? cloud.nearHubId
+              : 'cbd';
+          saveNearHubPreference(nextHub);
+
+          const nextEdition = cloud.edition ?? edition;
+          setEdition(nextEdition);
+          saveEditionPreference(nextEdition);
+
+          const nextLang = cloud.lang ?? lang;
+          setLang(nextLang);
+          saveLanguagePreference(nextLang);
+
+          setFilters((prev) => {
+            const nextCal = cinemaDataService.getCalendarDays(nextCity);
+            const nextCalSet = new Set(nextCal.map((d) => d.dateIso));
+            const keptDates = prev.selectedDates.filter((d) => nextCalSet.has(d));
+            const nextDates =
+              keptDates.length > 0 ? keptDates : [nextCal[0]?.dateIso ?? prev.dateIso];
+            return {
+              ...prev,
+              city: nextCity,
+              dateIso: nextDates[0],
+              selectedDates: nextDates,
+              nearHubId: nextHub,
+              favoritesOnly:
+                urlPatch.favoritesOnly ?? (nextFavOnly && mergedFavorites.length > 0),
+            };
+          });
+
+          // Write merged guest + cloud picks back to Firestore so nothing is lost
+          await saveCloudUserPreferences(authUser.uid, {
+            favoriteCinemas: mergedFavorites,
+            favoritesOnly: nextFavOnly,
+            defaultCity: nextCity,
+            nearHubId: nextHub,
+            customPlace: nextPlace ?? null,
+            watchlist: mergedWatchlist,
+            shortlist: mergedShortlist,
+            edition: nextEdition,
+            lang: nextLang,
+          });
+        } else {
+          // Brand-new member account: seed cloud profile from current local preferences
+          await saveCloudUserPreferences(authUser.uid, buildCurrentCloudPreferences());
+        }
+
+        if (!cancelled) {
+          cloudHydratedUidRef.current = authUser.uid;
+          setCloudSyncState('synced');
+        }
+      } catch {
+        if (!cancelled) {
+          cloudHydratedUidRef.current = authUser.uid;
+          setCloudSyncState('error');
+        }
+      }
+    };
+
+    void hydrateMemberPreferences();
+    return () => {
+      cancelled = true;
+    };
+    // Intentionally triggered only when the signed-in user identity changes
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authUser?.uid]);
+
+  // Auto-save preference changes to Cloud Firestore (debounced) while signed in
+  useEffect(() => {
+    if (!authUser || cloudHydratedUidRef.current !== authUser.uid) return;
+    if (suppressNextCloudSaveRef.current) {
+      suppressNextCloudSaveRef.current = false;
+      return;
+    }
+
+    setCloudSyncState('syncing');
+    const timer = window.setTimeout(() => {
+      saveCloudUserPreferences(authUser.uid, buildCurrentCloudPreferences())
+        .then(() => setCloudSyncState('synced'))
+        .catch(() => setCloudSyncState('error'));
+    }, 650);
+
+    return () => window.clearTimeout(timer);
+  }, [authUser, buildCurrentCloudPreferences]);
+
+  const handleManualCloudSync = async () => {
+    if (!authUser) return;
+    setCloudSyncState('syncing');
+    try {
+      await saveCloudUserPreferences(authUser.uid, buildCurrentCloudPreferences());
+      setCloudSyncState('synced');
+    } catch (err) {
+      setCloudSyncState('error');
+      throw err;
+    }
+  };
+
+  const handleToggleFavoritesOnlyDefault = () => {
+    setFavoritesOnlyDefault((prev) => {
+      const next = !prev;
+      saveFavoritesOnlyPreference(next);
+      setFilters((f) => ({
+        ...f,
+        favoritesOnly: next && favoriteCinemas.length > 0 ? true : next ? f.favoritesOnly : false,
+      }));
+      return next;
+    });
+  };
+
+  const handleSignOut = async () => {
+    cloudHydratedUidRef.current = null;
+    setAuthUser(null);
+    setCloudSyncState('idle');
+    setIsAccountModalOpen(false);
+    await signOutUser();
+    // Full reload clears residual in-memory client state cleanly on logout
+    window.location.reload();
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -363,6 +624,11 @@ export function App() {
   const handleSelectNearHub = (hubId: string) => {
     if (hubId !== 'gps') {
       setGpsStatus('idle');
+      saveNearHubPreference(hubId);
+    }
+    if (hubId === 'cbd') {
+      setCustomPlace(null);
+      saveCustomPlacePreference(null);
     }
     setFilters((prev) => ({ ...prev, nearHubId: hubId }));
   };
@@ -376,6 +642,8 @@ export function App() {
       setGpsStatus('active');
     } else {
       setCustomPlace(place);
+      saveCustomPlacePreference(place);
+      saveNearHubPreference('custom');
       setGpsStatus('idle');
     }
 
@@ -643,6 +911,10 @@ export function App() {
   };
 
   const handleUpdateFilters = (patch: Partial<FilterState>) => {
+    if (patch.favoritesOnly !== undefined && Object.keys(patch).length === 1) {
+      setFavoritesOnlyDefault(patch.favoritesOnly);
+      saveFavoritesOnlyPreference(patch.favoritesOnly);
+    }
     setFilters((prev) => {
       const next = { ...prev, ...patch };
       if (patch.selectedDates && patch.selectedDates.length > 0) {
@@ -1500,6 +1772,8 @@ export function App() {
             ? comingSoonGalleryItems.length
             : comingSoonItems.length
         }
+        authUser={authUser}
+        cloudSyncState={cloudSyncState}
         onChangeCity={handleChangeCity}
         onToggleLanguage={handleToggleLanguage}
         onChangeReleaseStatus={handleChangeReleaseStatus}
@@ -1507,6 +1781,7 @@ export function App() {
         onOpenLocationModal={handleOpenLocationModal}
         onToggleEdition={handleToggleEdition}
         onOpenApiSettings={() => setIsApiSettingsOpen(true)}
+        onOpenAccountModal={() => setIsAccountModalOpen(true)}
         onOpenShortlist={() => setIsShortlistOpen(true)}
         onResetHome={handleResetHome}
       />
@@ -1786,7 +2061,10 @@ export function App() {
         cinemaMap={allCinemasMap}
         shortlistedIds={shortlistedIds}
         hasTopOverlay={
-          inspectedRatingsMovie !== null || trailerMovie !== null || isLocationModalOpen
+          inspectedRatingsMovie !== null ||
+          trailerMovie !== null ||
+          isLocationModalOpen ||
+          isAccountModalOpen
         }
         onClose={() => setSelectedSession(null)}
         onToggleShortlist={handleToggleShortlist}
@@ -1804,7 +2082,10 @@ export function App() {
         lang={lang}
         userOrigin={userOrigin}
         hasTopOverlay={
-          inspectedRatingsMovie !== null || trailerMovie !== null || isLocationModalOpen
+          inspectedRatingsMovie !== null ||
+          trailerMovie !== null ||
+          isLocationModalOpen ||
+          isAccountModalOpen
         }
         onClose={() => setIsShortlistOpen(false)}
         onVote={handleVoteShortlist}
@@ -1838,6 +2119,24 @@ export function App() {
         onApplyCustomCoordinates={handleApplyCustomCoordinates}
         onSelectHub={handleSelectNearHub}
         onResetLocation={() => handleSelectNearHub('cbd')}
+      />
+
+      <AccountModal
+        isOpen={isAccountModalOpen}
+        lang={lang}
+        authConfigured={authConfigured}
+        user={authUser}
+        cloudSyncState={cloudSyncState}
+        favoriteCinemasCount={favoriteCinemas.length}
+        favoritesOnlyDefault={favoritesOnlyDefault}
+        defaultCity={filters.city}
+        locationLabel={userOrigin.shortLabel}
+        watchlistCount={watchlist.length}
+        shortlistCount={hydratedShortlist.length}
+        onClose={() => setIsAccountModalOpen(false)}
+        onToggleFavoritesOnlyDefault={handleToggleFavoritesOnlyDefault}
+        onManualSyncNow={handleManualCloudSync}
+        onSignOut={handleSignOut}
       />
 
       {isAdminMode && (

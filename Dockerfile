@@ -8,6 +8,15 @@ RUN npm ci
 COPY index.html tsconfig*.json vite.config.ts ./
 COPY public ./public
 COPY src ./src
+
+# Optional build-time public Firebase web config (also served at runtime via /api/client-config)
+ARG VITE_FIREBASE_API_KEY
+ARG VITE_FIREBASE_AUTH_DOMAIN
+ARG VITE_FIREBASE_PROJECT_ID
+ARG VITE_FIREBASE_STORAGE_BUCKET
+ARG VITE_FIREBASE_MESSAGING_SENDER_ID
+ARG VITE_FIREBASE_APP_ID
+
 RUN npm run build
 
 # Stage 2: Sleep-friendly production BFF + static SPA runtime (Render / Railway / Fly.io / Cloud Run)

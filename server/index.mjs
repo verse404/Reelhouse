@@ -124,11 +124,48 @@ const STATIC_MIME_TYPES = {
 const SPA_SECURITY_HEADERS = {
   'X-Content-Type-Options': 'nosniff',
   'X-Frame-Options': 'SAMEORIGIN',
+  'Cross-Origin-Opener-Policy': 'same-origin-allow-popups',
   'Referrer-Policy': 'strict-origin-when-cross-origin',
   'Permissions-Policy': 'camera=(), microphone=(), geolocation=(self)',
   'Content-Security-Policy':
-    "default-src 'self'; script-src 'self'; worker-src 'self'; manifest-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' https://image.tmdb.org https://m.media-amazon.com https://*.pipi.cn https://server.arcgisonline.com data:; connect-src 'self'; frame-src https://www.youtube-nocookie.com https://www.youtube.com; frame-ancestors 'self'; object-src 'none'; base-uri 'self';",
+    "default-src 'self'; script-src 'self' https://apis.google.com https://www.gstatic.com; worker-src 'self'; manifest-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' https://image.tmdb.org https://m.media-amazon.com https://*.pipi.cn https://server.arcgisonline.com https://lh3.googleusercontent.com data:; connect-src 'self' https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://firestore.googleapis.com https://*.firebaseio.com https://www.googleapis.com; frame-src https://www.youtube-nocookie.com https://www.youtube.com https://*.firebaseapp.com https://accounts.google.com; frame-ancestors 'self'; object-src 'none'; base-uri 'self';",
 };
+
+async function readPublicFirebaseClientConfig() {
+  const fromEnv = (k) => (process.env[k] || '').trim();
+  const fileVars = {};
+  try {
+    const raw = await fs.readFile(path.join(PROJECT_ROOT, '.env'), 'utf-8');
+    for (const line of raw.split('\n')) {
+      const t = line.trim();
+      if (!t || t.startsWith('#')) continue;
+      const eq = t.indexOf('=');
+      if (eq <= 0) continue;
+      const k = t.slice(0, eq).trim();
+      const v = t.slice(eq + 1).trim().replace(/^["']|["']$/g, '');
+      if (k.startsWith('VITE_FIREBASE_') || k.startsWith('FIREBASE_')) {
+        fileVars[k] = v;
+      }
+    }
+  } catch {
+    // Local .env optional in container deployments
+  }
+  const pick = (vKey, fKey) => fromEnv(vKey) || fromEnv(fKey) || fileVars[vKey] || fileVars[fKey] || '';
+  const apiKey = pick('VITE_FIREBASE_API_KEY', 'FIREBASE_API_KEY');
+  const authDomain = pick('VITE_FIREBASE_AUTH_DOMAIN', 'FIREBASE_AUTH_DOMAIN');
+  const projectId = pick('VITE_FIREBASE_PROJECT_ID', 'FIREBASE_PROJECT_ID');
+  const appId = pick('VITE_FIREBASE_APP_ID', 'FIREBASE_APP_ID');
+  if (!apiKey || !authDomain || !projectId || !appId) return null;
+  return {
+    apiKey,
+    authDomain,
+    projectId,
+    storageBucket: pick('VITE_FIREBASE_STORAGE_BUCKET', 'FIREBASE_STORAGE_BUCKET') || undefined,
+    messagingSenderId:
+      pick('VITE_FIREBASE_MESSAGING_SENDER_ID', 'FIREBASE_MESSAGING_SENDER_ID') || undefined,
+    appId,
+  };
+}
 
 function isAllowedOrigin(origin, requestHostHeader) {
   if (!origin) return true;
@@ -707,6 +744,18 @@ const server = http.createServer(async (req, res) => {
       remoteCatalogEnabled: Boolean(REMOTE_CATALOG_URL),
       syncedAtIso: remoteCatalogCache?.syncedAtIso || null,
     });
+    return;
+  }
+
+  if (isReadMethod && parsedUrl.pathname === '/api/client-config') {
+    const firebase = await readPublicFirebaseClientConfig();
+    writeJson(
+      req,
+      res,
+      200,
+      { ok: true, firebase },
+      { 'Cache-Control': 'public, max-age=300' }
+    );
     return;
   }
 

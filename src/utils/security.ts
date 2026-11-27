@@ -224,6 +224,9 @@ export function sanitizeSearchQuery(rawInput: string): string {
 const SHORTLIST_STORAGE_KEY = 'reelhouse_shortlist_v1';
 const WATCHLIST_STORAGE_KEY = 'reelhouse_watchlist_v1';
 const FAVORITE_CINEMAS_STORAGE_KEY = 'reelhouse_fav_cinemas_v1';
+const FAVORITES_ONLY_STORAGE_KEY = 'reelhouse_fav_only_v1';
+const NEAR_HUB_STORAGE_KEY = 'reelhouse_near_hub_v1';
+const CUSTOM_PLACE_STORAGE_KEY = 'reelhouse_custom_place_v1';
 const CITY_STORAGE_KEY = 'reelhouse_city_v1';
 const EDITION_STORAGE_KEY = 'reelhouse_edition_v1';
 const LANGUAGE_STORAGE_KEY = 'reelhouse_lang_v1';
@@ -390,6 +393,240 @@ export function saveFavoriteCinemas(cinemaIds: string[]): void {
   } catch {
     // Ignore storage errors
   }
+}
+
+export interface SavedCustomPlace {
+  label: string;
+  shortLabel: string;
+  city: CityId;
+  lat: number;
+  lng: number;
+}
+
+export interface CloudUserPreferences {
+  favoriteCinemas: string[];
+  favoritesOnly: boolean;
+  defaultCity: CityId;
+  nearHubId: string;
+  customPlace: SavedCustomPlace | null;
+  watchlist: string[];
+  shortlist: ShortlistEntry[];
+  edition: 'noir' | 'ivoire';
+  lang: AppLanguage;
+}
+
+const SAFE_HUB_ID_REGEX = /^[a-z0-9_-]{2,40}$/i;
+
+function sanitizePlaceLabel(raw: unknown, maxLen: number): string {
+  if (typeof raw !== 'string') return '';
+  let out = '';
+  for (const ch of raw.trim()) {
+    const code = ch.charCodeAt(0);
+    if (code >= 0x20 && code !== 0x7f && ch !== '<' && ch !== '>') {
+      out += ch;
+    }
+    if (out.length >= maxLen) break;
+  }
+  return out.trim();
+}
+
+export function validateSavedCustomPlace(raw: unknown): SavedCustomPlace | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const obj = raw as Record<string, unknown>;
+  const city =
+    obj.city === 'melbourne' || obj.city === 'sydney' || obj.city === 'shanghai'
+      ? obj.city
+      : null;
+  const lat = typeof obj.lat === 'number' ? obj.lat : Number.NaN;
+  const lng = typeof obj.lng === 'number' ? obj.lng : Number.NaN;
+  const label = sanitizePlaceLabel(obj.label, 120);
+  const shortLabel = sanitizePlaceLabel(obj.shortLabel, 48);
+  if (
+    !city ||
+    !Number.isFinite(lat) ||
+    !Number.isFinite(lng) ||
+    lat < -90 ||
+    lat > 90 ||
+    lng < -180 ||
+    lng > 180 ||
+    !label ||
+    !shortLabel
+  ) {
+    return null;
+  }
+  return { label, shortLabel, city, lat, lng };
+}
+
+export function loadValidatedFavoritesOnly(): boolean {
+  try {
+    return window.localStorage.getItem(FAVORITES_ONLY_STORAGE_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+export function saveFavoritesOnlyPreference(enabled: boolean): void {
+  try {
+    window.localStorage.setItem(FAVORITES_ONLY_STORAGE_KEY, enabled ? '1' : '0');
+  } catch {
+    // Ignore storage errors
+  }
+}
+
+export function loadValidatedNearHub(): string {
+  try {
+    const raw = window.localStorage.getItem(NEAR_HUB_STORAGE_KEY);
+    if (raw && SAFE_HUB_ID_REGEX.test(raw) && raw !== 'gps') {
+      return raw;
+    }
+    return 'cbd';
+  } catch {
+    return 'cbd';
+  }
+}
+
+export function saveNearHubPreference(hubId: string): void {
+  try {
+    if (SAFE_HUB_ID_REGEX.test(hubId) && hubId !== 'gps') {
+      window.localStorage.setItem(NEAR_HUB_STORAGE_KEY, hubId);
+    }
+  } catch {
+    // Ignore storage errors
+  }
+}
+
+export function loadValidatedCustomPlace(): SavedCustomPlace | null {
+  try {
+    const raw = window.localStorage.getItem(CUSTOM_PLACE_STORAGE_KEY);
+    if (!raw) return null;
+    return validateSavedCustomPlace(JSON.parse(raw));
+  } catch {
+    return null;
+  }
+}
+
+export function saveCustomPlacePreference(place: SavedCustomPlace | null): void {
+  try {
+    if (!place) {
+      window.localStorage.removeItem(CUSTOM_PLACE_STORAGE_KEY);
+      return;
+    }
+    const clean = validateSavedCustomPlace(place);
+    if (clean) {
+      window.localStorage.setItem(CUSTOM_PLACE_STORAGE_KEY, JSON.stringify(clean));
+    }
+  } catch {
+    // Ignore storage errors
+  }
+}
+
+/**
+ * Masks an email address before rendering in UI labels to avoid surfacing raw PII
+ * (e.g., "alice.smith@gmail.com" -> "al***h@gmail.com").
+ */
+export function maskEmailForDisplay(rawEmail: string): string {
+  const trimmed = String(rawEmail || '').trim();
+  const atIdx = trimmed.indexOf('@');
+  if (atIdx <= 0) return '';
+  const local = trimmed.slice(0, atIdx);
+  const domain = trimmed.slice(atIdx + 1);
+  if (!domain) return '';
+  if (local.length <= 2) {
+    return `${local[0]}***@${domain}`;
+  }
+  return `${local.slice(0, 2)}***${local.slice(-1)}@${domain}`;
+}
+
+/**
+ * Validates untrusted cloud preferences read from Firestore against strict allow-lists
+ * before applying to client state or writing back to Firestore.
+ */
+export function validateCloudUserPreferences(raw: unknown): Partial<CloudUserPreferences> {
+  if (!raw || typeof raw !== 'object') return {};
+  const obj = raw as Record<string, unknown>;
+  const out: Partial<CloudUserPreferences> = {};
+
+  if (Array.isArray(obj.favoriteCinemas)) {
+    out.favoriteCinemas = Array.from(
+      new Set(
+        obj.favoriteCinemas.filter(
+          (id): id is string => typeof id === 'string' && SAFE_ID_REGEX.test(id)
+        )
+      )
+    ).slice(0, 32);
+  }
+
+  if (typeof obj.favoritesOnly === 'boolean') {
+    out.favoritesOnly = obj.favoritesOnly;
+  }
+
+  if (
+    obj.defaultCity === 'melbourne' ||
+    obj.defaultCity === 'sydney' ||
+    obj.defaultCity === 'shanghai'
+  ) {
+    out.defaultCity = obj.defaultCity;
+  }
+
+  if (typeof obj.nearHubId === 'string' && SAFE_HUB_ID_REGEX.test(obj.nearHubId) && obj.nearHubId !== 'gps') {
+    out.nearHubId = obj.nearHubId;
+  }
+
+  if (obj.customPlace === null) {
+    out.customPlace = null;
+  } else if (obj.customPlace !== undefined) {
+    out.customPlace = validateSavedCustomPlace(obj.customPlace);
+  }
+
+  if (Array.isArray(obj.watchlist)) {
+    out.watchlist = Array.from(
+      new Set(
+        obj.watchlist.filter(
+          (id): id is string => typeof id === 'string' && SAFE_ID_REGEX.test(id)
+        )
+      )
+    ).slice(0, 24);
+  }
+
+  if (Array.isArray(obj.shortlist)) {
+    const validatedShortlist: ShortlistEntry[] = [];
+    const seen = new Set<string>();
+    for (const item of obj.shortlist.slice(0, 8)) {
+      if (
+        typeof item === 'object' &&
+        item !== null &&
+        'sessionId' in item &&
+        typeof (item as { sessionId?: unknown }).sessionId === 'string' &&
+        SAFE_ID_REGEX.test((item as { sessionId: string }).sessionId) &&
+        !seen.has((item as { sessionId: string }).sessionId)
+      ) {
+        const entry = item as { sessionId: string; votes?: unknown; addedAtMs?: unknown };
+        seen.add(entry.sessionId);
+        validatedShortlist.push({
+          sessionId: entry.sessionId,
+          votes:
+            typeof entry.votes === 'number' && Number.isFinite(entry.votes)
+              ? Math.max(1, Math.min(99, Math.floor(entry.votes)))
+              : 1,
+          addedAtMs:
+            typeof entry.addedAtMs === 'number' && Number.isFinite(entry.addedAtMs)
+              ? entry.addedAtMs
+              : Date.now(),
+        });
+      }
+    }
+    out.shortlist = validatedShortlist;
+  }
+
+  if (obj.edition === 'noir' || obj.edition === 'ivoire') {
+    out.edition = obj.edition;
+  }
+
+  if (obj.lang === 'en' || obj.lang === 'zh') {
+    out.lang = obj.lang;
+  }
+
+  return out;
 }
 
 const SAFE_YOUTUBE_KEY_REGEX = /^[A-Za-z0-9_-]{8,16}$/;
